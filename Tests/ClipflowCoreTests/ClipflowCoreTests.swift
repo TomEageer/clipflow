@@ -143,7 +143,7 @@ struct StoreTests {
     }
 
     private func snap(_ text: String, app: String = "com.test.app") -> RawSnapshot {
-        RawSnapshot(representations: [("public.utf8-plain-text", Data(text.utf8))],
+        RawSnapshot(representations: [("public.utf8-plain-text", Data(text.utf8), 0)],
                     sourceBundleID: app, sourceAppName: app)
     }
 
@@ -198,9 +198,9 @@ struct StoreTests {
         let html = "<html><body><b>\(String(repeating: plain, count: 80))</b></body></html>"
         let rtf = "{\\rtf1\\ansi \(String(repeating: plain, count: 80))}"
         let s = RawSnapshot(representations: [
-            ("public.utf8-plain-text", Data(plain.utf8)),
-            ("public.html", Data(html.utf8)),
-            ("public.rtf", Data(rtf.utf8)),
+            ("public.utf8-plain-text", Data(plain.utf8), 0),
+            ("public.html", Data(html.utf8), 0),
+            ("public.rtf", Data(rtf.utf8), 0),
         ])
         let id = try #require(try ingest.ingest(s))
         let reps = try store.representations(of: id)
@@ -228,12 +228,12 @@ struct StoreTests {
         let ingest = IngestService(store: store)
 
         let byUTI = RawSnapshot(representations: [
-            ("public.utf8-plain-text", Data("hunter2".utf8)),
-            ("org.nspasteboard.ConcealedType", Data()),
+            ("public.utf8-plain-text", Data("hunter2".utf8), 0),
+            ("org.nspasteboard.ConcealedType", Data(), 0),
         ])
         #expect(try ingest.ingest(byUTI) == nil)
 
-        let byApp = RawSnapshot(representations: [("public.utf8-plain-text", Data("hunter2".utf8))],
+        let byApp = RawSnapshot(representations: [("public.utf8-plain-text", Data("hunter2".utf8), 0)],
                                 sourceBundleID: "com.bitwarden.desktop")
         #expect(try ingest.ingest(byApp) == nil)
         #expect(try store.count() == 0)
@@ -261,7 +261,7 @@ struct StoreTests {
 
         let url = "file:///Users/tom/Movies/200MB-video.mp4"
         let id = try #require(try ingest.ingest(
-            RawSnapshot(representations: [("public.file-url", Data(url.utf8))])))
+            RawSnapshot(representations: [("public.file-url", Data(url.utf8), 0)])))
         let item = try #require(try store.recent().first)
         #expect(item.id == id)
         #expect(item.kind == .fileRef)
@@ -550,7 +550,7 @@ struct ThumbnailTests {
         let png = try makePNG(width: 640, height: 480)
 
         let id = try #require(try IngestService(store: store)
-            .ingest(RawSnapshot(representations: [("public.png", png)])))
+            .ingest(RawSnapshot(representations: [("public.png", png, 0)])))
         let item = try #require(try store.item(id: id))
         #expect(item.kind == .image)
         #expect(item.preview.contains("640×480"), "preview 里没有像素尺寸：\(item.preview)")
@@ -571,7 +571,7 @@ struct ListBehaviorTests {
         return (try ClipflowStore(paths: StoragePaths(root: dir)), dir)
     }
     private func snap(_ t: String) -> RawSnapshot {
-        RawSnapshot(representations: [("public.utf8-plain-text", Data(t.utf8))])
+        RawSnapshot(representations: [("public.utf8-plain-text", Data(t.utf8), 0)])
     }
 
     /// 重新复制一条老内容，它必须冒到列表顶部。
@@ -637,7 +637,7 @@ struct PasteSemanticsTests {
         return (try ClipflowStore(paths: StoragePaths(root: dir)), dir)
     }
     private func snap(_ t: String) -> RawSnapshot {
-        RawSnapshot(representations: [("public.utf8-plain-text", Data(t.utf8))])
+        RawSnapshot(representations: [("public.utf8-plain-text", Data(t.utf8), 0)])
     }
 
     /// 从历史里粘贴一条，语义上等于"重新复制了它"：
@@ -681,5 +681,172 @@ struct PasteSemanticsTests {
         let s = try String(contentsOf: p, encoding: .utf8)
         #expect(s.contains("frontmostApplication"), "没有轮询前台 App")
         #expect(!s.contains("asyncAfter(deadline: .now() + 0.6)"), "还有固定 600ms 延迟")
+    }
+}
+
+// MARK: - 多文件
+
+@Suite("多文件保真")
+struct MultiItemTests {
+
+    private func tempStore() throws -> (ClipflowStore, URL) {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "clipflow-test-\(UUID().uuidString)")
+        return (try ClipflowStore(paths: StoragePaths(root: dir)), dir)
+    }
+
+    /// 复制多个文件时剪贴板上是多个 NSPasteboardItem，每个挂一个 public.file-url。
+    /// 拍平成一个列表的话，写回时同一 UTI 反复 setData 后者覆盖前者，三个文件只剩一个。
+    @Test("多文件复制要保留每个 item 的结构")
+    func preservesMultipleItems() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let urls = ["file:///Users/tom/a.xlsx", "file:///Users/tom/b.pdf", "file:///Users/tom/c.png"]
+        let snap = RawSnapshot(representations: urls.enumerated().map {
+            ("public.file-url", Data($1.utf8), $0)
+        })
+        let id = try #require(try IngestService(store: store).ingest(snap))
+
+        let reps = try store.representations(of: id)
+        #expect(reps.count == 3, "三个文件被合并了")
+        #expect(Set(reps.map(\.itemIndex)) == [0, 1, 2], "itemIndex 没保留")
+
+        // 每个文件的路径都要能原样还原
+        var restored: [String] = []
+        for r in reps.sorted(by: { $0.itemIndex < $1.itemIndex }) {
+            let d = try #require(try store.data(of: r))
+            restored.append(try #require(String(data: d, encoding: .utf8)))
+        }
+        #expect(restored == urls)
+    }
+
+    @Test("单个复制里的多种格式仍归到同一 item")
+    func singleItemKeepsIndexZero() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let snap = RawSnapshot(representations: [
+            ("public.utf8-plain-text", Data("文本".utf8), 0),
+            ("public.rtf", Data("{\\rtf1 文本}".utf8), 0),
+        ])
+        let id = try #require(try IngestService(store: store).ingest(snap))
+        let reps = try store.representations(of: id)
+        #expect(reps.count == 2)
+        #expect(reps.allSatisfy { $0.itemIndex == 0 })
+    }
+}
+
+// MARK: - 清理
+
+@Suite("清理策略")
+struct CleanupTests {
+
+    private func tempStore() throws -> (ClipflowStore, URL) {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "clipflow-test-\(UUID().uuidString)")
+        return (try ClipflowStore(paths: StoragePaths(root: dir)), dir)
+    }
+    private func snap(_ t: String) -> RawSnapshot {
+        RawSnapshot(representations: [("public.utf8-plain-text", Data(t.utf8), 0)])
+    }
+
+    /// 置顶条目永不自动清理 —— 用户明确表示要留着的东西不能悄悄删掉
+    @Test("置顶条目不被保留期清理")
+    func pinnedSurvivesRetention() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+
+        let pinned = try #require(try ingest.ingest(snap("要留着的")))
+        try ingest.ingest(snap("会被清掉的"))
+        try store.setPinned(true, itemID: pinned)
+
+        var s = ClipflowSettings()
+        s.retention = .days7
+        s.maxStorageMB = 0
+        // 假装现在是 30 天后
+        let r = try store.cleanup(settings: s, now: Date().addingTimeInterval(30 * 86400))
+        #expect(r.byRetention == 1)
+        let left = try store.recent()
+        #expect(left.count == 1)
+        #expect(left.first?.preview == "要留着的")
+    }
+
+    @Test("敏感条目按独立 TTL 清理")
+    func sensitiveTTL() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        try ingest.ingest(snap("api_key = sk-live-abcdef123456"))
+        try ingest.ingest(snap("普通文本"))
+
+        var s = ClipflowSettings()
+        s.sensitiveTTL = .seconds60
+        s.retention = .forever
+        s.maxStorageMB = 0
+        let r = try store.cleanup(settings: s, now: Date().addingTimeInterval(120))
+        #expect(r.bySensitiveTTL == 1)
+        #expect(try store.count() == 1)
+        #expect(try store.recent().first?.preview == "普通文本")
+    }
+
+    @Test("条目数上限淘汰最久未用的")
+    func maxItems() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        for i in 0..<10 { try ingest.ingest(snap("条目 \(i)")) }
+
+        var s = ClipflowSettings()
+        s.maxItems = 4
+        s.retention = .forever
+        s.maxStorageMB = 0
+        let r = try store.cleanup(settings: s)
+        #expect(r.byMaxItems == 6)
+        #expect(try store.count() == 4)
+        // 留下的应该是最近的
+        #expect(try store.recent().first?.preview == "条目 9")
+    }
+
+    /// 删条目只删数据库行，CAS 里的附件要单独回收，否则磁盘只涨不降
+    @Test("孤儿附件能被回收")
+    func vacuumOrphanBlobs() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+
+        let big = String(repeating: "需要外置到 CAS 的长内容。", count: 200)
+        let id = try #require(try ingest.ingest(snap(big)))
+        #expect(store.blobs.stats().count > 0)
+
+        try store.delete(itemID: id)
+        let v = try store.vacuumBlobs()
+        #expect(v.removed > 0, "孤儿附件没被回收")
+        #expect(store.blobs.stats().count == 0)
+    }
+
+    @Test("按类型统计占用")
+    func breakdown() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        try ingest.ingest(snap("纯文本一"))
+        try ingest.ingest(snap("纯文本二"))
+        try ingest.ingest(RawSnapshot(representations: [("public.file-url", Data("file:///a".utf8), 0)]))
+
+        let rows = try store.breakdownByKind()
+        #expect(rows.contains { $0.kind == .text && $0.count == 2 })
+        #expect(rows.contains { $0.kind == .fileRef && $0.count == 1 })
+    }
+
+    @Test("排序方式都能跑通")
+    func sortOrders() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        for i in 0..<5 { try ingest.ingest(snap("条目 \(i)")) }
+        for order in ClipflowStore.SortOrder.allCases {
+            #expect(try store.browse(sort: order).count == 5, "\(order) 挂了")
+        }
     }
 }

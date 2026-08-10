@@ -137,7 +137,7 @@ do {
         guard !args.isEmpty else { print("需要文本"); exit(1) }
         let text = args.joined(separator: " ")
         let snap = RawSnapshot(
-            representations: [("public.utf8-plain-text", Data(text.utf8))],
+            representations: [("public.utf8-plain-text", Data(text.utf8), 0)],
             sourceBundleID: "cli.clipflow", sourceAppName: "clipflow-cli"
         )
         if let id = try ingest.ingest(snap) {
@@ -164,7 +164,7 @@ do {
             let text = "\(body) #\(i) trackID=trace-2026\(String(format: "%06d", i))"
             let app = apps[i % apps.count]
             let snap = RawSnapshot(
-                representations: [("public.utf8-plain-text", Data(text.utf8))],
+                representations: [("public.utf8-plain-text", Data(text.utf8), 0)],
                 sourceBundleID: app.0, sourceAppName: app.1,
                 capturedAt: Date().addingTimeInterval(-Double(n - i))
             )

@@ -103,6 +103,13 @@ public struct Representation: Codable, Sendable, FetchableRecord, MutablePersist
 
     public var id: Int64?
     public var itemID: Int64
+    /// 该 representation 属于剪贴板上的第几个 NSPasteboardItem。
+    ///
+    /// **必须保留这个结构**：复制多个文件时剪贴板上是多个 item，每个挂一个
+    /// public.file-url。若拍平成一个列表，写回时同一 UTI 反复 setData 后者覆盖前者，
+    /// 三个文件只剩一个。实测验证过：原生写法 readObjects 得到 2 个 URL，
+    /// 拍平写法只得到 1 个。
+    public var itemIndex: Int
     /// UTI，如 public.utf8-plain-text / public.rtf / public.png
     public var uti: String
     /// < 512B 直接内联（实测 120B 文本压缩后仍 97.5%，压了白压）
@@ -118,11 +125,12 @@ public struct Representation: Codable, Sendable, FetchableRecord, MutablePersist
         case lzfse
     }
 
-    public init(id: Int64? = nil, itemID: Int64, uti: String,
+    public init(id: Int64? = nil, itemID: Int64, itemIndex: Int = 0, uti: String,
                 inlineData: Data? = nil, blobHash: String? = nil,
                 codec: Codec = .none, byteSize: Int) {
         self.id = id
         self.itemID = itemID
+        self.itemIndex = itemIndex
         self.uti = uti
         self.inlineData = inlineData
         self.blobHash = blobHash

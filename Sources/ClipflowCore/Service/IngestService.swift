@@ -6,13 +6,15 @@ import Foundation
 /// 多个 representation（public.rtf / public.html / public.utf8-plain-text / …），
 /// 要「粘回去和原来一模一样」就得原样存、原样写回。
 public struct RawSnapshot: Sendable {
-    public var representations: [(uti: String, data: Data)]
+    /// `itemIndex` = 该格式属于剪贴板上的第几个 NSPasteboardItem。
+    /// 复制多个文件时会有多个 item，**不能拍平**，否则写回只剩一个。
+    public var representations: [(uti: String, data: Data, itemIndex: Int)]
     public var sourceBundleID: String?
     public var sourceAppName: String?
     public var windowTitle: String?
     public var capturedAt: Date
 
-    public init(representations: [(uti: String, data: Data)],
+    public init(representations: [(uti: String, data: Data, itemIndex: Int)],
                 sourceBundleID: String? = nil,
                 sourceAppName: String? = nil,
                 windowTitle: String? = nil,
@@ -88,7 +90,7 @@ public struct IngestService: Sendable {
 
         // 全部 representation 合并算指纹，用于去重
         var hasher = Data()
-        for r in snap.representations.sorted(by: { $0.uti < $1.uti }) {
+        for r in snap.representations.sorted(by: { ($0.itemIndex, $0.uti) < ($1.itemIndex, $1.uti) }) {
             hasher.append(r.uti.data(using: .utf8) ?? Data())
             hasher.append(r.data)
         }
@@ -112,20 +114,21 @@ public struct IngestService: Sendable {
         var reps: [Representation] = []
         for r in snap.representations {
             if r.data.count < Compressor.threshold {
-                reps.append(Representation(itemID: 0, uti: r.uti,
+                reps.append(Representation(itemID: 0, itemIndex: r.itemIndex, uti: r.uti,
                                            inlineData: r.data, byteSize: r.data.count))
             } else if let packed = Compressor.compress(r.data) {
                 // 压不动就存原始，别为负收益的压缩付解压成本
                 let useCompressed = packed.count < r.data.count
                 let payload = useCompressed ? packed : r.data
                 let hash = try store.blobs.put(payload)
-                reps.append(Representation(itemID: 0, uti: r.uti, blobHash: hash,
+                reps.append(Representation(itemID: 0, itemIndex: r.itemIndex, uti: r.uti,
+                                           blobHash: hash,
                                            codec: useCompressed ? .lzfse : .none,
                                            byteSize: r.data.count))
             } else {
                 let hash = try store.blobs.put(r.data)
-                reps.append(Representation(itemID: 0, uti: r.uti, blobHash: hash,
-                                           codec: .none, byteSize: r.data.count))
+                reps.append(Representation(itemID: 0, itemIndex: r.itemIndex, uti: r.uti,
+                                           blobHash: hash, codec: .none, byteSize: r.data.count))
             }
         }
 

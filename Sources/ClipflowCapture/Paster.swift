@@ -54,7 +54,7 @@ public final class Paster: @unchecked Sendable {
     /// **不备份、不恢复原剪贴板**：从历史里选一条粘贴，语义上就等于"重新复制了它"，
     /// 之后再按 ⌘V 理应还是这条。恢复旧内容会让用户困惑，而且备份需要读全部
     /// representation —— 那是可能阻塞的操作，白白挡在粘贴路径上。
-    public func stage(representations: [(uti: String, data: Data)]) throws {
+    public func stage(representations: [(uti: String, data: Data, itemIndex: Int)]) throws {
         guard !representations.isEmpty else { throw Failure.nothingToPaste }
         writeToPasteboard(representations)
         watcher?.suppressNextChange()
@@ -90,36 +90,39 @@ public final class Paster: @unchecked Sendable {
     }
 
     /// 一步到位（保留给不关心时序的调用方）
-    public func paste(representations: [(uti: String, data: Data)]) throws {
+    public func paste(representations: [(uti: String, data: Data, itemIndex: Int)]) throws {
         try stage(representations: representations)
         try pasteNow(waitingFor: nil)
     }
 
     /// 只放进剪贴板，不合成按键。无权限时的降级路径。
-    public func copyOnly(representations: [(uti: String, data: Data)]) {
+    public func copyOnly(representations: [(uti: String, data: Data, itemIndex: Int)]) {
         writeToPasteboard(representations)
         watcher?.suppressNextChange()
     }
 
-    private func writeToPasteboard(_ representations: [(uti: String, data: Data)]) {
+    /// 写回剪贴板。**必须还原原来的多 item 结构**。
+    ///
+    /// 复制多个文件时剪贴板上是多个 NSPasteboardItem，每个挂一个 public.file-url。
+    /// 如果塞进同一个 item 反复 setData，同一 UTI 后者覆盖前者 —— 三个文件只剩一个。
+    /// 实测：原生写法 `readObjects(forClasses:[NSURL])` 得到 2 个，拍平写法只得到 1 个。
+    private func writeToPasteboard(_ representations: [(uti: String, data: Data, itemIndex: Int)]) {
         let pb = NSPasteboard.general
         pb.clearContents()
-        let item = NSPasteboardItem()
-        for (uti, data) in representations where !data.isEmpty {
-            item.setData(data, forType: NSPasteboard.PasteboardType(uti))
-        }
-        pb.writeObjects([item])
-    }
 
-    static func snapshotForRestore(_ pb: NSPasteboard) -> [[String: Data]] {
-        guard let items = pb.pasteboardItems else { return [] }
-        return items.map { item in
-            var dict: [String: Data] = [:]
-            for t in item.types where TypePolicy.shouldRead(t.rawValue) {
-                if let d = item.data(forType: t) { dict[t.rawValue] = d }
+        // 按原来的 item 分组还原
+        let grouped = Dictionary(grouping: representations.filter { !$0.data.isEmpty },
+                                 by: { $0.itemIndex })
+        let items: [NSPasteboardItem] = grouped.keys.sorted().compactMap { idx in
+            guard let reps = grouped[idx], !reps.isEmpty else { return nil }
+            let item = NSPasteboardItem()
+            for r in reps {
+                item.setData(r.data, forType: NSPasteboard.PasteboardType(r.uti))
             }
-            return dict
+            return item
         }
+        guard !items.isEmpty else { return }
+        pb.writeObjects(items)
     }
 
     /// 合成 Cmd+V。用 CGEvent 而非 AppleScript —— 更快且不依赖自动化权限。

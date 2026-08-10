@@ -174,12 +174,12 @@ public final class PasteboardWatcher: ClipSource, @unchecked Sendable {
     public static func snapshot(from pb: NSPasteboard, maxBytes: Int) -> RawSnapshot? {
         guard let items = pb.pasteboardItems, !items.isEmpty else { return nil }
 
-        var reps: [(uti: String, data: Data)] = []
+        var reps: [(uti: String, data: Data, itemIndex: Int)] = []
         var total = 0
         let started = CFAbsoluteTimeGetCurrent()
         let cache = NegativeTypeCache.shared
 
-        for item in items {
+        for (index, item) in items.enumerated() {
             for type in item.types {
                 guard TypePolicy.shouldRead(type.rawValue) else { continue }
                 if cache.isBad(type.rawValue) { continue }
@@ -191,11 +191,11 @@ public final class PasteboardWatcher: ClipSource, @unchecked Sendable {
                     cache.markBad(type.rawValue)
                 case .value(nil):
                     // 空 data 的类型要保留 —— concealed 标记就是「只有类型没有内容」的标志位
-                    reps.append((type.rawValue, Data()))
+                    reps.append((type.rawValue, Data(), index))
                 case .value(let data?):
                     total += data.count
                     if total > maxBytes { break }
-                    reps.append((type.rawValue, data))
+                    reps.append((type.rawValue, data, index))
                 }
             }
         }

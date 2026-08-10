@@ -20,6 +20,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// 而且下一次 ⌘V 会打到空处。这是"生硬"感最主要的来源之一。
     private var previousApp: NSRunningApplication?
     private var paster: Paster!
+    private var settingsWC: SettingsWindowController?
+    private var settings = ClipflowSettings.load()
+    private var cleanupTimer: Timer?
     /// 可观测：上次粘贴等待前台就绪花了多久
     private(set) var lastPasteWaitMs: Double = 0
 
@@ -50,6 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setupPanel()
         setupHotKey()
         startCapture()
+        startCleanupSchedule()
     }
 
     // MARK: 菜单栏
@@ -96,8 +100,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(header)
         menu.addItem(.separator())
 
-        let open = NSMenuItem(title: "打开剪贴板面板", action: #selector(togglePanel), keyEquivalent: "v")
-        open.keyEquivalentModifierMask = [.command, .shift]
+        let combo = HotKeyCombo.load()
+        let open = NSMenuItem(title: "打开剪贴板面板（\(combo.display)）",
+                              action: #selector(togglePanel), keyEquivalent: "")
         open.target = self
         menu.addItem(open)
 
@@ -125,9 +130,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
-        let stats = NSMenuItem(title: "存储占用…", action: #selector(showStats), keyEquivalent: "")
-        stats.target = self
-        menu.addItem(stats)
+        let prefs = NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ",")
+        prefs.target = self
+        menu.addItem(prefs)
 
         let quit = NSMenuItem(title: "退出 Clipflow", action: #selector(NSApplication.terminate(_:)),
                               keyEquivalent: "q")
@@ -168,6 +173,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panel = ClipPanel(contentRect: NSRect(x: 0, y: 0, width: 700, height: 440))
         panel.contentView = NSHostingView(rootView: ClipListView(model: model))
         panel.onDismiss = { [weak self] in self?.hidePanel() }
+        panel.onModifierKey = { [weak self] action in
+            self?.model.handleKey(action) ?? false
+        }
     }
 
     @objc private func togglePanel() {
@@ -181,7 +189,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         model.query = ""
         model.reload()
-        panel.positionAtCursor()
+        let anchor = panel.positionAtCursor()
+        // 面板开在鼠标左侧时，把列表挪到靠鼠标的那一边
+        model.mirrored = anchor.mirrorsHorizontally
         panel.fadeIn()
         // nonactivating panel 不抢前台，但要激活自己才能收键盘输入
         NSApp.activate(ignoringOtherApps: true)
@@ -225,14 +235,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: 热键
 
     private func setupHotKey() {
-        // ⌘⇧V —— 用 Carbon RegisterEventHotKey，不需要辅助功能权限
-        hotKey = HotKey(keyCode: UInt32(kVK_ANSI_V),
-                        modifiers: UInt32(cmdKey | shiftKey)) { [weak self] in
+        applyHotKey(HotKeyCombo.load())
+    }
+
+    /// 注册/重注册全局热键。用 Carbon RegisterEventHotKey，不需要辅助功能权限 ——
+    /// 唤出面板这件事本来就不该要权限。
+    @discardableResult
+    func applyHotKey(_ combo: HotKeyCombo) -> Bool {
+        hotKey?.unregister()
+        hotKey = HotKey(keyCode: combo.keyCode, modifiers: combo.carbonModifiers) { [weak self] in
             Task { @MainActor in self?.togglePanel() }
         }
-        if hotKey == nil {
-            notify("全局热键 ⌘⇧V 注册失败，可能已被其它 App 占用")
-        }
+        let ok = hotKey != nil
+        if ok { combo.save() }
+        rebuildMenu()
+        return ok
+    }
+
+    static func applyHotKeyGlobally(_ combo: HotKeyCombo) -> Bool {
+        current?.applyHotKey(combo) ?? false
     }
 
     // MARK: 捕获
@@ -253,6 +274,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func requestPermission() {
         Paster.requestAccessibilityPermission()
         startPermissionPolling()
+    }
+
+    @objc private func openSettings() {
+        if settingsWC == nil { settingsWC = SettingsWindowController(store: store) }
+        settingsWC?.show()
+    }
+
+    /// 定期按设置清理。启动 30s 后跑一次，之后每小时一次。
+    /// 不在启动瞬间跑 —— 那会和"启动时捕获剪贴板"抢资源，用户还什么都没看到就先卡一下。
+    private func startCleanupSchedule() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+            self?.runCleanup()
+        }
+        cleanupTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in
+            Task { @MainActor [weak self] in self?.runCleanup() }
+        }
+    }
+
+    private func runCleanup() {
+        settings = ClipflowSettings.load()
+        let store = self.store!
+        let s = settings
+        DispatchQueue.global(qos: .utility).async {
+            _ = try? store.cleanup(settings: s)
+            _ = try? store.vacuumBlobs()
+            Task { @MainActor [weak self] in self?.rebuildMenu() }
+        }
     }
 
     @objc private func showStats() {

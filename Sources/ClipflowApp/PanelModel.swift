@@ -10,6 +10,9 @@ final class PanelModel: ObservableObject {
     @Published private(set) var items: [ClipItem] = []
     @Published var selection: Int = 0
     @Published private(set) var total: Int = 0
+    /// 面板开在鼠标左侧时为 true：列表与预览左右对调，让可点击的列表贴着鼠标。
+    /// 只镜像左右，**不做上下反转** —— 列表倒序违反阅读直觉。
+    @Published var mirrored: Bool = false
 
     private let store: ClipflowStore
     private let paster: Paster
@@ -169,10 +172,10 @@ final class PanelModel: ObservableObject {
         guard let item = selectedItem, let id = item.id else { return }
 
         // ① 先取内容并写进剪贴板 —— 放在最前面，因为它最快且是兜底
-        var payload: [(uti: String, data: Data)] = []
+        var payload: [(uti: String, data: Data, itemIndex: Int)] = []
         do {
             for r in try store.representations(of: id) {
-                if let d = try store.data(of: r), !d.isEmpty { payload.append((r.uti, d)) }
+                if let d = try store.data(of: r), !d.isEmpty { payload.append((r.uti, d, r.itemIndex)) }
             }
             try paster.stage(representations: payload)
         } catch {

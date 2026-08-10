@@ -71,6 +71,14 @@ public enum Migrations {
                           columns: ["pinned", "usedSeq"], ifNotExists: true)
         }
 
+        // 保留剪贴板的多 item 结构。复制多个文件时每个文件是一个独立的
+        // NSPasteboardItem，拍平后写回只能还原出一个。
+        m.registerMigration("v3_itemIndex") { db in
+            try db.alter(table: "representations") { t in
+                t.add(column: "itemIndex", .integer).notNull().defaults(to: 0)
+            }
+        }
+
         return m
     }
 

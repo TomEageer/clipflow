@@ -7,7 +7,11 @@ final class ClipPanel: NSPanel {
 
     /// 点击面板外部时关闭。剪贴板面板是"用完即走"的，只能按 Esc 关很生硬。
     private var outsideClickMonitor: Any?
+    private var localKeyMonitor: Any?
     var onDismiss: (() -> Void)?
+    /// 带修饰键的快捷键（⌘1~9 / ⌘P / ⌘⌫）不会经过 field editor 的命令选择器，
+    /// 得在面板层面用 local monitor 拦。
+    var onModifierKey: ((KeyAction) -> Bool)?
 
     init(contentRect: NSRect) {
         super.init(contentRect: contentRect,
@@ -34,22 +38,54 @@ final class ClipPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
-    /// 定位到鼠标旁，跨屏边界钳制。
-    func positionAtCursor() {
+    /// 面板相对鼠标的展开方向。
+    ///
+    /// 只做**左右镜像**，不做上下反转 —— 列表倒序违反阅读直觉，试过，反人类。
+    enum Anchor {
+        case right   // 面板开在鼠标右侧：列表贴左边，本来就离鼠标近
+        case left    // 面板开在鼠标左侧：列表要换到右边，才靠近鼠标
+
+        /// 面板在鼠标左侧时，内部左右布局镜像：可点击的列表挪到靠鼠标那一边
+        var mirrorsHorizontally: Bool { self == .left }
+    }
+
+    private(set) var anchor: Anchor = .right
+
+    /// 定位到鼠标旁，并算出展开方向。
+    ///
+    /// **跟随鼠标的目的是让鼠标少动。**
+    ///
+    /// 面板默认开在鼠标右侧，列表在左半边 —— 紧挨鼠标。
+    /// 但到了屏幕右边缘，面板只能开在鼠标左侧，此时鼠标在面板的**右**边，
+    /// 而列表还在最左边，等于隔着整个预览面板，跟随就白做了。
+    /// 所以这时把**列表和预览左右对调**，让可点击的列表始终贴着鼠标那一侧。
+    ///
+    /// 只镜像左右，不做上下反转 —— 列表倒序违反阅读直觉。
+    @discardableResult
+    func positionAtCursor() -> Anchor {
         let mouse = NSEvent.mouseLocation
         let size = frame.size
-        var origin = NSPoint(x: mouse.x + 8, y: mouse.y - size.height - 8)
+        let gap: CGFloat = 8
 
         let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
-        if let visible = screen?.visibleFrame {
-            // 下方放不下就翻到鼠标上方，而不是硬贴着屏幕底边
-            if origin.y < visible.minY + 4 {
-                origin.y = min(mouse.y + 8, visible.maxY - size.height - 4)
-            }
-            origin.x = min(max(origin.x, visible.minX + 4), visible.maxX - size.width - 4)
-            origin.y = min(max(origin.y, visible.minY + 4), visible.maxY - size.height - 4)
-        }
+        let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+
+        // 下方放得下就往下开，否则往上
+        let fitsBelow = (mouse.y - gap - size.height) >= visible.minY
+        // 右侧放得下就往右开，否则往左
+        let fitsRight = (mouse.x + gap + size.width) <= visible.maxX
+
+        var origin = NSPoint(
+            x: fitsRight ? mouse.x + gap : mouse.x - gap - size.width,
+            y: fitsBelow ? mouse.y - gap - size.height : mouse.y + gap
+        )
+        // 兜底钳制（比如屏幕比面板还小）
+        origin.x = min(max(origin.x, visible.minX + 4), visible.maxX - size.width - 4)
+        origin.y = min(max(origin.y, visible.minY + 4), visible.maxY - size.height - 4)
         setFrameOrigin(origin)
+
+        anchor = fitsRight ? .right : .left
+        return anchor
     }
 
     /// 淡入。130ms —— 快到不觉得在等，又不会"啪"地跳出来。
@@ -62,11 +98,13 @@ final class ClipPanel: NSPanel {
             animator().alphaValue = 1
         }
         startOutsideClickMonitor()
+        startLocalKeyMonitor()
     }
 
     /// 淡出。比淡入更快 —— 关闭要干脆，拖泥带水最影响手感。
     func fadeOut(completion: (() -> Void)? = nil) {
         stopOutsideClickMonitor()
+        stopLocalKeyMonitor()
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.08
             ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
@@ -75,6 +113,28 @@ final class ClipPanel: NSPanel {
             self?.orderOut(nil)
             completion?()
         }
+    }
+
+    private func startLocalKeyMonitor() {
+        guard localKeyMonitor == nil else { return }
+        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+            guard let self, self.isKeyWindow || self.isVisible else { return event }
+            guard event.modifierFlags.contains(.command) else { return event }
+
+            var action: KeyAction?
+            if event.keyCode == 51 { action = .delete }               // ⌘⌫
+            else if let c = event.charactersIgnoringModifiers?.lowercased().first {
+                if c.isNumber, c != "0" { action = .pick(Int(String(c))! - 1) }
+                else if c == "p" { action = .pin }
+            }
+            if let action, self.onModifierKey?(action) == true { return nil }
+            return event
+        }
+    }
+
+    private func stopLocalKeyMonitor() {
+        if let m = localKeyMonitor { NSEvent.removeMonitor(m) }
+        localKeyMonitor = nil
     }
 
     private func startOutsideClickMonitor() {
@@ -90,6 +150,13 @@ final class ClipPanel: NSPanel {
         if let m = outsideClickMonitor { NSEvent.removeMonitor(m) }
         outsideClickMonitor = nil
     }
+
+    /// 面板被 orderOut（粘贴路径）时也要摘掉监听
+    override func orderOut(_ sender: Any?) {
+        stopOutsideClickMonitor()
+        stopLocalKeyMonitor()
+        super.orderOut(sender)
+    }
 }
 
 // MARK: - 面板内容
@@ -97,14 +164,32 @@ final class ClipPanel: NSPanel {
 struct ClipListView: View {
     @ObservedObject var model: PanelModel
 
+    /// 面板开在鼠标左侧时为 true：列表与预览左右对调，让列表贴着鼠标。
+    private var mirrored: Bool { model.mirrored }
+
     var body: some View {
         HStack(spacing: 0) {
-            // ── 左：列表
-            VStack(spacing: 0) {
-                SearchField(text: $model.query, onKey: model.handleKey)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 10).padding(.bottom, 8)
+            if mirrored {
+                PreviewPane(model: model).frame(width: 320)
+                Divider().opacity(0.5)
+            }
 
+            listColumn
+
+            if !mirrored {
+                Divider().opacity(0.5)
+                PreviewPane(model: model).frame(width: 320)
+            }
+        }
+        .frame(width: 700, height: 440)
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.primary.opacity(0.08)))
+    }
+
+    private var listColumn: some View {
+            VStack(spacing: 0) {
+                searchBar
                 Divider().opacity(0.5)
 
                 if model.items.isEmpty {
@@ -145,17 +230,12 @@ struct ClipListView: View {
                 footer
             }
             .frame(width: 380)
+    }
 
-            Divider().opacity(0.5)
-
-            // ── 右：选中项预览。选中了看不到全貌，是判断"是不是这条"最大的障碍
-            PreviewPane(model: model)
-                .frame(width: 320)
-        }
-        .frame(width: 700, height: 440)
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.primary.opacity(0.08)))
+    private var searchBar: some View {
+        SearchField(text: $model.query, onKey: model.handleKey)
+            .padding(.horizontal, 12)
+            .padding(.top, 10).padding(.bottom, 8)
     }
 
     private var footer: some View {
@@ -316,65 +396,72 @@ private struct RowView: View {
 
 // MARK: 搜索框
 
+/// 承载键盘事件的搜索框。
+///
+/// ⚠️ 键盘处理必须走 `control(_:textView:doCommandBy:)`，**不能 override keyDown**。
+///
+/// NSTextField 获得焦点时，真正的 first responder 是它的 **field editor**（一个共享的
+/// NSTextView），按键先到 field editor，text field 自己的 keyDown 根本收不到。
+/// Esc 关不掉面板就是这么来的 —— 代码看着写了，实际从没被调用过。
 private struct SearchField: NSViewRepresentable {
     @Binding var text: String
     var onKey: (KeyAction) -> Bool
 
     func makeNSView(context: Context) -> NSTextField {
-        let tf = KeyCatchingTextField()
+        let tf = NSTextField()
         tf.placeholderString = "搜索剪贴板…"
         tf.isBordered = false
         tf.drawsBackground = false
         tf.focusRingType = .none
         tf.delegate = context.coordinator
-        tf.onKey = onKey
         tf.font = .systemFont(ofSize: 14)
         return tf
     }
 
     func updateNSView(_ nsView: NSTextField, context: Context) {
+        context.coordinator.onKey = onKey
         if nsView.stringValue != text { nsView.stringValue = text }
-        (nsView as? KeyCatchingTextField)?.onKey = onKey
+        // 面板每次弹出都能直接打字，不用先点一下
+        if nsView.window != nil, nsView.window?.firstResponder !== nsView.currentEditor() {
+            nsView.window?.makeFirstResponder(nsView)
+        }
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeCoordinator() -> Coordinator { Coordinator(self, onKey: onKey) }
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
         let parent: SearchField
-        init(_ p: SearchField) { parent = p }
+        var onKey: (KeyAction) -> Bool
+
+        init(_ p: SearchField, onKey: @escaping (KeyAction) -> Bool) {
+            parent = p
+            self.onKey = onKey
+        }
+
         func controlTextDidChange(_ obj: Notification) {
             guard let tf = obj.object as? NSTextField else { return }
             parent.text = tf.stringValue
+        }
+
+        /// field editor 把按键翻译成命令选择器后回调这里。这是唯一可靠的拦截点。
+        func control(_ control: NSControl, textView: NSTextView,
+                     doCommandBy selector: Selector) -> Bool {
+            switch selector {
+            case #selector(NSResponder.cancelOperation(_:)):        // esc
+                return onKey(.cancel)
+            case #selector(NSResponder.moveUp(_:)),
+                 #selector(NSResponder.moveToBeginningOfDocument(_:)):
+                return onKey(.up)
+            case #selector(NSResponder.moveDown(_:)),
+                 #selector(NSResponder.moveToEndOfDocument(_:)):
+                return onKey(.down)
+            case #selector(NSResponder.insertNewline(_:)):          // 回车
+                return onKey(.confirm)
+            default:
+                return false
+            }
         }
     }
 }
 
 enum KeyAction { case up, down, confirm, cancel, pick(Int), delete, pin }
-
-private final class KeyCatchingTextField: NSTextField {
-    var onKey: ((KeyAction) -> Bool)?
-
-    override func keyDown(with event: NSEvent) {
-        let cmd = event.modifierFlags.contains(.command)
-        var action: KeyAction?
-
-        if cmd {
-            if event.keyCode == 51 { action = .delete }            // ⌘⌫
-            else if let c = event.charactersIgnoringModifiers?.lowercased().first {
-                if c.isNumber, c != "0" { action = .pick(Int(String(c))! - 1) }
-                else if c == "p" { action = .pin }
-            }
-        }
-        if action == nil {
-            switch event.keyCode {
-            case 126: action = .up
-            case 125: action = .down
-            case 36, 76: action = .confirm
-            case 53: action = .cancel
-            default: break
-            }
-        }
-        if let action, onKey?(action) == true { return }
-        super.keyDown(with: event)
-    }
-}

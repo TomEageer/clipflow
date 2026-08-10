@@ -219,6 +219,126 @@ public final class ClipflowStore: Sendable {
         }
     }
 
+    // MARK: 批量删除（供设置页与清理逻辑用）
+
+    /// 按条件删除，同时清索引。返回删除条数。
+    func deleteWhere(_ condition: String, _ args: [any DatabaseValueConvertible]) throws -> Int {
+        let ids: [Int64] = try contentPool.read { db in
+            try Int64.fetchAll(db, sql: "SELECT id FROM items WHERE \(condition)",
+                               arguments: StatementArguments(args))
+        }
+        guard !ids.isEmpty else { return 0 }
+        try deleteIDs(ids)
+        return ids.count
+    }
+
+    /// 保留最近的 limit 条，其余按最久未用删除
+    func deleteOldestBeyond(limit: Int) throws -> Int {
+        let ids: [Int64] = try contentPool.read { db in
+            try Int64.fetchAll(db, sql: """
+                SELECT id FROM items WHERE pinned = 0
+                ORDER BY usedSeq DESC LIMIT -1 OFFSET ?
+                """, arguments: [limit])
+        }
+        guard !ids.isEmpty else { return 0 }
+        try deleteIDs(ids)
+        return ids.count
+    }
+
+    func deleteOldestBatch(count: Int) throws -> Int {
+        let ids: [Int64] = try contentPool.read { db in
+            try Int64.fetchAll(db, sql: """
+                SELECT id FROM items WHERE pinned = 0 ORDER BY usedSeq ASC LIMIT ?
+                """, arguments: [count])
+        }
+        guard !ids.isEmpty else { return 0 }
+        try deleteIDs(ids)
+        return ids.count
+    }
+
+    public func deleteIDs(_ ids: [Int64]) throws {
+        guard !ids.isEmpty else { return }
+        let marks = databaseQuestionMarks(count: ids.count)
+        try contentPool.write { db in
+            try db.execute(sql: "DELETE FROM items WHERE id IN (\(marks))",
+                           arguments: StatementArguments(ids))
+        }
+        try indexPool.write { db in
+            try db.execute(sql: "DELETE FROM items_fts WHERE rowid IN (\(marks))",
+                           arguments: StatementArguments(ids))
+        }
+    }
+
+    /// 清空全部（保留置顶的选项）
+    @discardableResult
+    public func deleteAll(keepPinned: Bool = true) throws -> Int {
+        try deleteWhere(keepPinned ? "pinned = 0" : "1 = 1", [])
+    }
+
+    func allBlobHashes() throws -> [String] {
+        try contentPool.read { db in
+            try String.fetchAll(db, sql:
+                "SELECT DISTINCT blobHash FROM representations WHERE blobHash IS NOT NULL")
+        }
+    }
+
+    // MARK: 浏览与统计（设置页用）
+
+    public enum SortOrder: String, Sendable, CaseIterable {
+        case recentlyUsed, newest, oldest, largest, mostUsed
+
+        public var label: String {
+            switch self {
+            case .recentlyUsed: return "最近使用"
+            case .newest: return "最新创建"
+            case .oldest: return "最早创建"
+            case .largest: return "占用最大"
+            case .mostUsed: return "使用最多"
+            }
+        }
+        var sql: String {
+            switch self {
+            case .recentlyUsed: return "usedSeq DESC"
+            case .newest: return "createdAt DESC"
+            case .oldest: return "createdAt ASC"
+            case .largest: return "byteSize DESC"
+            case .mostUsed: return "useCount DESC, usedSeq DESC"
+            }
+        }
+    }
+
+    public func browse(sort: SortOrder = .recentlyUsed, kind: ClipKind? = nil,
+                       query: String = "", limit: Int = 500) throws -> [ClipItem] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        if !q.isEmpty {
+            let hits = try search(q, limit: limit)
+            let filtered = kind.map { k in hits.filter { $0.kind == k } } ?? hits
+            return filtered
+        }
+        var conditions: [String] = []
+        var args: [any DatabaseValueConvertible] = []
+        if let kind { conditions.append("kind = ?"); args.append(kind.rawValue) }
+        let whereSQL = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
+        return try contentPool.read { db in
+            try ClipItem.fetchAll(db, sql:
+                "SELECT * FROM items \(whereSQL) ORDER BY pinned DESC, \(sort.sql) LIMIT ?",
+                arguments: StatementArguments(args + [limit]))
+        }
+    }
+
+    /// 按类型统计条数与占用，设置页的存储管理用
+    public func breakdownByKind() throws -> [(kind: ClipKind, count: Int, bytes: Int)] {
+        try contentPool.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT kind, count(*) AS c, sum(byteSize) AS b
+                FROM items GROUP BY kind ORDER BY b DESC
+                """).compactMap { row in
+                guard let k = ClipKind(rawValue: row["kind"] as Int) else { return nil }
+                return (k, row["c"] as Int, (row["b"] as Int?) ?? 0)
+            }
+        }
+    }
+
     /// 空闲时维护：合并 FTS 段 + 回收空间。实测 100 万条 optimize 耗时 2.7s，之后检索中位 0.27→0.10ms。
     public func optimize() throws {
         try indexPool.write { db in
