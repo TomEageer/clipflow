@@ -559,3 +559,69 @@ struct ThumbnailTests {
         #expect(store.thumbnail(for: item) != nil)
     }
 }
+
+// MARK: - 列表行为
+
+@Suite("列表行为")
+struct ListBehaviorTests {
+
+    private func tempStore() throws -> (ClipflowStore, URL) {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "clipflow-test-\(UUID().uuidString)")
+        return (try ClipflowStore(paths: StoragePaths(root: dir)), dir)
+    }
+    private func snap(_ t: String) -> RawSnapshot {
+        RawSnapshot(representations: [("public.utf8-plain-text", Data(t.utf8))])
+    }
+
+    /// 重新复制一条老内容，它必须冒到列表顶部。
+    /// 之前按 createdAt 排序 → 去重只更新 lastUsedAt → 老条目仍沉在底部，
+    /// 用户明明刚复制过却要翻半天。所有剪贴板工具都是置顶的。
+    @Test("重新复制的老内容要冒到顶部")
+    func recopiedItemFloatsToTop() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+
+        try ingest.ingest(snap("最早的内容"))
+        try ingest.ingest(snap("中间的内容"))
+        try ingest.ingest(snap("最新的内容"))
+        #expect(try store.recent().first?.preview == "最新的内容")
+
+        // 重新复制第一条
+        try ingest.ingest(snap("最早的内容"))
+        #expect(try store.recent().first?.preview == "最早的内容",
+                "重新复制的内容没有冒到顶部")
+        #expect(try store.count() == 3, "不该新建条目")
+    }
+
+    /// 粘贴过的内容也要冒到顶部 —— 下次唤出就在手边
+    @Test("粘贴过的内容冒到顶部")
+    func pastedItemFloatsToTop() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        let first = try #require(try ingest.ingest(snap("第一条")))
+        try ingest.ingest(snap("第二条"))
+        #expect(try store.recent().first?.preview == "第二条")
+
+        try store.touch(itemID: first)
+        #expect(try store.recent().first?.preview == "第一条")
+    }
+
+    @Test("置顶的条目永远排在最前")
+    func pinnedFirst() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        let old = try #require(try ingest.ingest(snap("很老的条目")))
+        for i in 0..<5 { try ingest.ingest(snap("后来的 \(i)")) }
+        #expect(try store.recent().first?.preview != "很老的条目")
+
+        try store.setPinned(true, itemID: old)
+        #expect(try store.recent().first?.preview == "很老的条目")
+
+        try store.setPinned(false, itemID: old)
+        #expect(try store.recent().first?.preview != "很老的条目")
+    }
+}

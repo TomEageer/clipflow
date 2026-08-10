@@ -52,6 +52,25 @@ public enum Migrations {
             try db.create(index: "idx_reps_blob", on: "representations", columns: ["blobHash"])
         }
 
+        // 列表顺序不能靠时间戳决定。
+        //
+        // 同一毫秒内的多次写入会拿到**完全相同**的 lastUsedAt（GRDB 存到毫秒），
+        // 排序随即变成未定义 —— 实测："重新复制老内容要置顶"的测试直接挂掉。
+        // 时钟精度不该决定用户看到的顺序，改用单调递增序号，精确且与时钟无关。
+        m.registerMigration("v2_usedSeq") { db in
+            try db.alter(table: "items") { t in
+                t.add(column: "usedSeq", .integer).notNull().defaults(to: 0)
+            }
+            // 已有数据按 lastUsedAt 回填一个合理顺序
+            try db.execute(sql: """
+                UPDATE items SET usedSeq = (
+                    SELECT count(*) FROM items AS b WHERE b.lastUsedAt <= items.lastUsedAt
+                )
+                """)
+            try db.create(index: "idx_items_usedSeq", on: "items",
+                          columns: ["pinned", "usedSeq"], ifNotExists: true)
+        }
+
         return m
     }
 

@@ -10,7 +10,9 @@ APP="build/Clipflow.app"
 BIN=".build/${CONFIG}/ClipflowApp"
 
 echo "▶ 编译（${CONFIG}）"
-swift build -c "$CONFIG" --product ClipflowApp
+# 全量编译，不要只编 App —— 只编 App 会让 CLI 停留在旧版本，
+# 而 CLI 正是验证行为的工具，用过期的工具验证会得出错误结论（踩过一次）。
+swift build -c "$CONFIG"
 
 echo "▶ 组装 bundle"
 rm -rf "$APP"

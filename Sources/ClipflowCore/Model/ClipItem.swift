@@ -47,6 +47,9 @@ public struct ClipItem: Codable, Sendable, FetchableRecord, MutablePersistableRe
     public var createdAt: Date
     public var lastUsedAt: Date
     public var useCount: Int
+    /// 单调递增的"最近使用"序号。列表排序用它而不是 lastUsedAt ——
+    /// 同一毫秒内的多次写入时间戳相同，排序会变成未定义。
+    public var usedSeq: Int64
     public var pinned: Bool
     public var sourceBundleID: String?
     public var sourceAppName: String?
@@ -63,6 +66,7 @@ public struct ClipItem: Codable, Sendable, FetchableRecord, MutablePersistableRe
         createdAt: Date = Date(),
         lastUsedAt: Date = Date(),
         useCount: Int = 0,
+        usedSeq: Int64 = 0,
         pinned: Bool = false,
         sourceBundleID: String? = nil,
         sourceAppName: String? = nil,
@@ -77,6 +81,7 @@ public struct ClipItem: Codable, Sendable, FetchableRecord, MutablePersistableRe
         self.createdAt = createdAt
         self.lastUsedAt = lastUsedAt
         self.useCount = useCount
+        self.usedSeq = usedSeq
         self.pinned = pinned
         self.sourceBundleID = sourceBundleID
         self.sourceAppName = sourceAppName

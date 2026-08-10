@@ -15,6 +15,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var store: ClipflowStore!
     private var captureTask: Task<Void, Never>?
     private var capturedCount = 0
+    /// 唤出面板前记住是谁在前台，关闭时还回去。
+    /// 不还的话，关掉面板后前台是 Clipflow 自己 —— 用户看到原窗口标题栏变灰，
+    /// 而且下一次 ⌘V 会打到空处。这是"生硬"感最主要的来源之一。
+    private var previousApp: NSRunningApplication?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 菜单栏常驻，不进 Dock
@@ -88,8 +92,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: 面板
 
     private func setupPanel() {
-        panel = ClipPanel(contentRect: NSRect(x: 0, y: 0, width: 460, height: 420))
+        panel = ClipPanel(contentRect: NSRect(x: 0, y: 0, width: 700, height: 440))
         panel.contentView = NSHostingView(rootView: ClipListView(model: model))
+        panel.onDismiss = { [weak self] in self?.hidePanel() }
     }
 
     @objc private func togglePanel() {
@@ -97,16 +102,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showPanel() {
+        // 先记住当前前台 App，关闭时原样还回去
+        let front = NSWorkspace.shared.frontmostApplication
+        if front?.bundleIdentifier != Bundle.main.bundleIdentifier { previousApp = front }
+
         model.query = ""
         model.reload()
         panel.positionAtCursor()
-        panel.makeKeyAndOrderFront(nil)
-        // nonactivating panel 不抢前台，但需要激活自己才能收键盘
+        panel.fadeIn()
+        // nonactivating panel 不抢前台，但要激活自己才能收键盘输入
         NSApp.activate(ignoringOtherApps: true)
     }
 
     private func hidePanel() {
-        panel.orderOut(nil)
+        guard panel.isVisible else { return }
+        panel.fadeOut { [weak self] in
+            guard let self else { return }
+            // 焦点还给原来那个 App。放在淡出完成之后，避免动画期间来回抢。
+            if let prev = self.previousApp, !prev.isTerminated {
+                prev.activate()
+            }
+            self.previousApp = nil
+        }
     }
 
     // MARK: 热键

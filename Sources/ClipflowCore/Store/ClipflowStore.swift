@@ -58,7 +58,10 @@ public final class ClipflowStore: Sendable {
         if let id = existingID {
             try contentPool.write { db in
                 try db.execute(sql: """
-                    UPDATE items SET lastUsedAt = ?, useCount = useCount + 1 WHERE id = ?
+                    UPDATE items
+                    SET lastUsedAt = ?, useCount = useCount + 1,
+                        usedSeq = (SELECT IFNULL(MAX(usedSeq), 0) + 1 FROM items)
+                    WHERE id = ?
                     """, arguments: [Date(), id])
             }
             return id
@@ -66,6 +69,7 @@ public final class ClipflowStore: Sendable {
 
         var stored = item
         let newID: Int64 = try contentPool.write { db in
+            stored.usedSeq = (try Int64.fetchOne(db, sql: "SELECT IFNULL(MAX(usedSeq), 0) + 1 FROM items")) ?? 1
             try stored.insert(db)
             let id = stored.id!
             for var rep in representations {
@@ -92,12 +96,40 @@ public final class ClipflowStore: Sendable {
 
     // MARK: 读取
 
-    /// 最近条目。**恒定 ORDER BY createdAt DESC，绝不 ORDER BY rank。**
+    /// 最近条目。
+    ///
+    /// 按 **usedSeq**（单调递增序号）排序，不是 createdAt 也不是 lastUsedAt：
+    /// - 不用 createdAt：重新复制老内容时去重命中已有条目，按创建时间排它会继续沉在底部，
+    ///   用户明明刚复制过却要翻半天。所有剪贴板工具都是置顶的。
+    /// - 不用 lastUsedAt：同一毫秒内的多次写入时间戳完全相同，排序变成未定义（实测挂过测试）。
+    ///   时钟精度不该决定用户看到的顺序。
+    ///
+    /// **恒定按时间排，绝不 ORDER BY rank。**
     public func recent(limit: Int = 50, offset: Int = 0) throws -> [ClipItem] {
         try contentPool.read { db in
             try ClipItem.fetchAll(db, sql: """
-                SELECT * FROM items ORDER BY pinned DESC, createdAt DESC LIMIT ? OFFSET ?
+                SELECT * FROM items ORDER BY pinned DESC, usedSeq DESC LIMIT ? OFFSET ?
                 """, arguments: [limit, offset])
+        }
+    }
+
+    /// 置顶 / 取消置顶
+    public func setPinned(_ pinned: Bool, itemID: Int64) throws {
+        try contentPool.write { db in
+            try db.execute(sql: "UPDATE items SET pinned = ? WHERE id = ?",
+                           arguments: [pinned, itemID])
+        }
+    }
+
+    /// 标记为刚使用过（粘贴后调用），让它冒到列表顶部
+    public func touch(itemID: Int64) throws {
+        try contentPool.write { db in
+            try db.execute(sql: """
+                UPDATE items
+                SET lastUsedAt = ?, useCount = useCount + 1,
+                    usedSeq = (SELECT IFNULL(MAX(usedSeq), 0) + 1 FROM items)
+                WHERE id = ?
+                """, arguments: [Date(), itemID])
         }
     }
 
