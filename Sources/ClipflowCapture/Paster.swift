@@ -2,6 +2,30 @@ import AppKit
 import Carbon.HIToolbox
 import ClipflowCore
 
+/// 粘贴诊断日志。粘贴失败时用户只看到"没反应"，没有日志根本没法定位。
+/// 写到 ~/Library/Logs/Clipflow/paste.log，滚动保留最近 200 行。
+public enum PasteLog {
+    private static let lock = NSLock()
+
+    public static var url: URL {
+        let dir = FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: "Library/Logs/Clipflow")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appending(path: "paste.log")
+    }
+
+    public static func write(_ line: String) {
+        lock.lock(); defer { lock.unlock() }
+        let f = DateFormatter(); f.dateFormat = "HH:mm:ss.SSS"
+        let entry = "[\(f.string(from: Date()))] \(line)\n"
+        var existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        existing += entry
+        let lines = existing.split(separator: "\n", omittingEmptySubsequences: false)
+        if lines.count > 200 { existing = lines.suffix(200).joined(separator: "\n") }
+        try? existing.write(to: url, atomically: true, encoding: .utf8)
+    }
+}
+
 /// 粘贴引擎：把内容写回剪贴板并向前台 App 合成 Cmd+V。
 ///
 /// 顺序错了就失败，每一步都有明确理由。
@@ -58,6 +82,14 @@ public final class Paster: @unchecked Sendable {
         guard !representations.isEmpty else { throw Failure.nothingToPaste }
         writeToPasteboard(representations)
         watcher?.suppressNextChange()
+
+        let pb = NSPasteboard.general
+        let wroteItems = Set(representations.map(\.itemIndex)).count
+        let readBack = pb.pasteboardItems?.count ?? -1
+        let utis = Set(representations.map(\.uti)).sorted().joined(separator: ",")
+        PasteLog.write("stage: 写入 \(representations.count) rep / \(wroteItems) item"
+            + " → 回读 \(readBack) item · 类型 [\(utis)]"
+            + (readBack != wroteItems ? "  ⚠️ item 数对不上" : ""))
     }
 
     /// 等目标 App 真正回到前台，然后合成 ⌘V。
@@ -71,10 +103,18 @@ public final class Paster: @unchecked Sendable {
     @discardableResult
     public func pasteNow(waitingFor target: NSRunningApplication?,
                          timeout: TimeInterval = 0.25) throws -> Double {
-        guard Self.hasAccessibilityPermission else { throw Failure.noAccessibilityPermission }
-        if Self.isSecureInputEnabled() { throw Failure.secureInputEnabled(byProcess: nil) }
+        guard Self.hasAccessibilityPermission else {
+            PasteLog.write("pasteNow: 中止 —— 没有辅助功能权限")
+            throw Failure.noAccessibilityPermission
+        }
+        if Self.isSecureInputEnabled() {
+            PasteLog.write("pasteNow: 中止 —— 系统处于安全输入模式")
+            throw Failure.secureInputEnabled(byProcess: nil)
+        }
 
         let t0 = CFAbsoluteTimeGetCurrent()
+        PasteLog.write("pasteNow: 目标=\(target?.localizedName ?? "无") "
+            + "辅助功能=\(Self.hasAccessibilityPermission) 安全输入=\(Self.isSecureInputEnabled())")
         if let target {
             let deadline = t0 + timeout
             while CFAbsoluteTimeGetCurrent() < deadline {
@@ -85,8 +125,11 @@ public final class Paster: @unchecked Sendable {
                 usleep(2000)
             }
         }
+        let front = NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"
         Self.sendCommandV()
-        return (CFAbsoluteTimeGetCurrent() - t0) * 1000
+        let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+        PasteLog.write("pasteNow: 已发 ⌘V，等待 \(String(format: "%.0f", ms))ms，前台=\(front)")
+        return ms
     }
 
     /// 一步到位（保留给不关心时序的调用方）

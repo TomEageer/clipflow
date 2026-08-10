@@ -353,6 +353,24 @@ do {
         print("\n成功 \(ok) / 失败 \(failed) · 共 \(String(format: "%.0f", Date().timeIntervalSince(t0) * 1000))ms")
         print("原图占用 \(fmtBytes(s2.blobBytes))")
 
+    case "restore":
+        // 把某条真正写回剪贴板（走生产的 Paster 路径），用于验证保真度
+        guard let idStr = args.first, let id = Int64(idStr) else { print("需要 id"); exit(1) }
+        let reps = try store.representations(of: id)
+        var payload: [(uti: String, data: Data, itemIndex: Int)] = []
+        for r in reps {
+            if let d = try store.data(of: r), !d.isEmpty { payload.append((r.uti, d, r.itemIndex)) }
+        }
+        try Paster().stage(representations: payload)
+        let itemCount = Set(payload.map(\.itemIndex)).count
+        print("已写回剪贴板：\(payload.count) 个 representation，\(itemCount) 个 item")
+        if itemCount > 1 {
+            // ⚠️ 实测：写入进程一退出，多 item 内容会塌成 1 个。
+            //    命令行工具写完就退，读到的是假象 —— 必须保持存活。
+            print("多 item 内容需要写入进程保持存活，按 Ctrl+C 结束（保持 60s）")
+            Thread.sleep(forTimeInterval: 60)
+        }
+
     case "optimize":
         let t0 = Date()
         try store.optimize()

@@ -131,6 +131,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
+        let log = NSMenuItem(title: "查看粘贴日志…", action: #selector(openPasteLog), keyEquivalent: "")
+        log.target = self
+        menu.addItem(log)
+
         let prefs = NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ",")
         prefs.target = self
         menu.addItem(prefs)
@@ -204,6 +208,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// 所以哪怕这里任何一步失败，用户手动 ⌘V 也拿得到。
     private func pasteToPreviousApp() {
         let target = previousApp
+        PasteLog.write("——— 开始粘贴，目标 App = \(target?.localizedName ?? "未记录") ———")
         // 立刻收起面板。orderOut 而不是等淡出动画 —— 粘贴路径上不留任何等待。
         panel.orderOut(nil)
         target?.activate()
@@ -329,6 +334,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func requestPermission() {
         Paster.requestAccessibilityPermission()
         startPermissionPolling()
+    }
+
+    @objc private func openPasteLog() {
+        let url = PasteLog.url
+        if !FileManager.default.fileExists(atPath: url.path) {
+            try? "（还没有粘贴记录）".write(to: url, atomically: true, encoding: .utf8)
+        }
+        NSWorkspace.shared.open(url)
     }
 
     @objc private func openSettings() {
