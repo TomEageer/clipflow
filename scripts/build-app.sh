@@ -9,12 +9,12 @@ CONFIG=${1:-release}
 APP="build/Clipflow.app"
 BIN=".build/${CONFIG}/ClipflowApp"
 
-echo "▶ 编译（${CONFIG}）"
+echo "编译（${CONFIG}）"
 # 全量编译，不要只编 App —— 只编 App 会让 CLI 停留在旧版本，
 # 而 CLI 正是验证行为的工具，用过期的工具验证会得出错误结论（踩过一次）。
 swift build -c "$CONFIG"
 
-echo "▶ 组装 bundle"
+echo "组装 bundle"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Clipflow"
@@ -54,11 +54,11 @@ if security find-identity -v -p codesigning 2>/dev/null | grep -q 'Apple Develop
 fi
 
 if [ -n "$IDENTITY" ]; then
-  echo "▶ 签名：$IDENTITY"
+  echo "签名：$IDENTITY"
   codesign --force --deep --sign "$IDENTITY" "$APP"
   codesign -d -r- "$APP" 2>&1 | grep designated | sed 's/^/    /' || true
 else
-  echo "▶ 签名：ad-hoc（每次重编都会让辅助功能授权失效）"
+  echo "签名：ad-hoc（每次重编都会让辅助功能授权失效）"
   codesign --force --deep --sign - "$APP" 2>/dev/null || true
 fi
 

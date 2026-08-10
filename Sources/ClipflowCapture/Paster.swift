@@ -90,7 +90,7 @@ public final class Paster: @unchecked Sendable {
         let utis = Set(representations.map(\.uti)).sorted().joined(separator: ",")
         var line = "stage: 写入 \(representations.count) rep / \(wroteItems) item"
             + " → 回读 \(readBack) item · 类型 [\(utis)]"
-        if readBack != wroteItems { line += "  ⚠️ item 数对不上" }
+        if readBack != wroteItems { line += "  [警告] item 数对不上" }
 
         let fileCount = representations.filter { $0.uti == "public.file-url" }.count
         if fileCount > 0 {
@@ -100,7 +100,7 @@ public final class Paster: @unchecked Sendable {
             line += "\n        文件自检: 期望 \(fileCount) 个 → readObjects \(urls.count) 个"
                 + " · NSFilenames \(names?.count ?? -1) 个 · 磁盘上真实存在 \(existing) 个"
             if existing < urls.count {
-                line += "  ⚠️ 有文件已被移动或删除，接收方粘不出来"
+                line += "  [警告] 有文件已被移动或删除，接收方粘不出来"
             }
         }
         PasteLog.write(line)

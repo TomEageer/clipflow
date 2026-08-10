@@ -102,21 +102,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         // 显示**实际生效**的组合；一个都注册不上时明确说出来，不装作正常
         let title = activeCombo.map { "打开剪贴板面板（\($0.display)）" }
-            ?? "打开剪贴板面板（⚠️ 快捷键未生效）"
+            ?? "打开剪贴板面板（快捷键未生效）"
         let open = NSMenuItem(title: title, action: #selector(togglePanel), keyEquivalent: "")
         open.target = self
+        if activeCombo == nil {
+            open.image = NSImage(systemSymbolName: "exclamationmark.triangle",
+                                 accessibilityDescription: nil)
+        }
         menu.addItem(open)
 
         menu.addItem(.separator())
 
         // 权限状态**始终显示**，不是只在缺失时才出现。
         // 只在缺失时显示的话，用户授权后看到条目消失，没法确认"到底成没成"。
+        // 状态用 SF Symbol 表达，不用 emoji —— 原生应用不该出现表情符号
         let granted = Paster.hasAccessibilityPermission
         let perm = NSMenuItem(
-            title: granted ? "✅ 自动粘贴已就绪" : "⚠️ 未授权 —— 点此授予辅助功能权限",
+            title: granted ? "自动粘贴已就绪" : "未授权 — 点此授予辅助功能权限",
             action: granted ? nil : #selector(requestPermission), keyEquivalent: "")
         perm.target = self
         perm.isEnabled = !granted
+        perm.image = NSImage(systemSymbolName: granted ? "checkmark.circle" : "exclamationmark.triangle",
+                             accessibilityDescription: nil)
         menu.addItem(perm)
 
         if !granted {

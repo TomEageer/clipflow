@@ -82,8 +82,8 @@ func printItems(_ items: [ClipItem]) {
     if items.isEmpty { print("（无结果）"); return }
     for it in items {
         let id = it.id.map(String.init) ?? "-"
-        let pin = it.pinned ? "📌" : "  "
-        let sens = it.sensitivity == .sensitive ? "🔒" : "  "
+        let pin = it.pinned ? "*" : " "
+        let sens = it.sensitivity == .sensitive ? "!" : " "
         let app = it.sourceAppName ?? it.sourceBundleID ?? "-"
         print("\(pin)\(sens)#\(id.padding(toLength: max(5, id.count), withPad: " ", startingAt: 0)) "
               + "[\(it.kind.label)] \(dateFmt.string(from: it.createdAt))  \(app)")
@@ -129,7 +129,7 @@ do {
                 print("      → \(oneLine(s, 60))")
             }
             if actual != r.byteSize {
-                print("      ⚠️ 还原后 \(actual)B ≠ 原始 \(r.byteSize)B")
+                print("      [警告] 还原后 \(actual)B ≠ 原始 \(r.byteSize)B")
             }
         }
 
@@ -185,7 +185,7 @@ do {
         for f in [paths.contentDB, paths.indexDB] where FileManager.default.fileExists(atPath: f.path) {
             let a = try FileManager.default.attributesOfItem(atPath: f.path)
             let perm = (a[.posixPermissions] as? NSNumber)?.intValue ?? 0
-            let flag = perm == 0o600 ? "✅" : "⚠️"
+            let flag = perm == 0o600 ? "ok  " : "警告"
             print("\(flag) \(f.lastPathComponent) 权限 \(String(perm, radix: 8))")
         }
 
@@ -194,7 +194,7 @@ do {
         setvbuf(stdout, nil, _IOLBF, 0)
         let seconds = Double(args.first ?? "") ?? 10
         let watcher = PasteboardWatcher()
-        print("▶ 同步轮询 \(Int(seconds))s（200ms 一次）")
+        print("同步轮询 \(Int(seconds))s（200ms 一次）")
         let deadline = Date().addingTimeInterval(seconds)
         var n = 0
         while Date() < deadline {
@@ -208,12 +208,12 @@ do {
                     // recent(1) 会取到别的条目，显示与实际写入的对不上。
                     let item = (try? store.item(id: id)) ?? nil
                     print("  #\(id) [\(item?.kind.label ?? "?")]"
-                          + "\(item?.sensitivity == .sensitive ? " 🔒" : "") \(app) · "
+                          + "\(item?.sensitivity == .sensitive ? " [敏感]" : "") \(app) · "
                           + "\(utis.count) 种格式 · \(fmtBytes(bytes))")
                     print("      \(oneLine(item?.preview ?? "", 60))")
                     if utis.count > 1 { print("      \(utis.prefix(5).joined(separator: ", "))") }
                 } else {
-                    print("  ⊘ 拦截 (\(app)) · \(utis.prefix(3).joined(separator: ", "))")
+                    print("  -- 拦截 (\(app)) · \(utis.prefix(3).joined(separator: ", "))")
                 }
             }
             usleep(200_000)
@@ -228,7 +228,7 @@ do {
         setvbuf(stdout, nil, _IOLBF, 0)
 
         let watcher = PasteboardWatcher()
-        print("▶ 开始监听剪贴板（Ctrl+C 停止）")
+        print("开始监听剪贴板（Ctrl+C 停止）")
         print("  轮询 200ms · 空闲 60s 后降到 1s · 密码管理器内容会被拦截\n")
 
         // 计数器要跨线程读写（消费任务写、信号处理器读），用带锁的引用类型。
@@ -262,7 +262,7 @@ do {
                     // recent(1) 会取到别的条目，显示与实际写入的对不上。
                     let item = (try? store.item(id: id)) ?? nil
                     let kind = item?.kind.label ?? "?"
-                    let sens = item?.sensitivity == .sensitive ? " 🔒敏感" : ""
+                    let sens = item?.sensitivity == .sensitive ? " [敏感]" : ""
                     let kb = ByteCountFormatter().string(fromByteCount: Int64(bytes))
                     print("  #\(id) [\(kind)]\(sens) \(app) · \(utis.count) 种格式 · \(kb)")
                     print("      \(Formatting.oneLine(item?.preview ?? "", 64))")
@@ -271,7 +271,7 @@ do {
                     }
                 } else {
                     counters.blocked()
-                    print("  ⊘ 已拦截（\(app)）· \(utis.prefix(3).joined(separator: ", "))")
+                    print("  -- 已拦截（\(app)）· \(utis.prefix(3).joined(separator: ", "))")
                 }
             }
             sem.signal()
@@ -317,7 +317,7 @@ do {
             let sorted = ts.sorted()
             let p95 = sorted[min(sorted.count - 1, Int(Double(sorted.count) * 0.95))]
             let budget = 16.0
-            let flag = p95 < budget ? "✅" : "❌"
+            let flag = p95 < budget ? "ok  " : "超预算"
             print("\(flag) \(label.padding(toLength: 22, withPad: " ", startingAt: 0))"
                   + "首次 \(String(format: "%6.2f", ts[0]))ms  "
                   + "中位 \(String(format: "%5.2f", sorted[sorted.count / 2]))ms  "
@@ -342,11 +342,11 @@ do {
             let t = Date()
             if let png = store.thumbnail(for: it) {
                 ok += 1
-                print("  ✅ #\(it.id ?? 0)  \(oneLine(it.preview, 34))  → 缩略图 \(fmtBytes(png.count))"
+                print("  ok   #\(it.id ?? 0)  \(oneLine(it.preview, 34))  → 缩略图 \(fmtBytes(png.count))"
                       + "  \(String(format: "%.0f", Date().timeIntervalSince(t) * 1000))ms")
             } else {
                 failed += 1
-                print("  ❌ #\(it.id ?? 0)  \(oneLine(it.preview, 34))  生成失败")
+                print("  FAIL #\(it.id ?? 0)  \(oneLine(it.preview, 34))  生成失败")
             }
         }
         let s2 = try store.stats()
