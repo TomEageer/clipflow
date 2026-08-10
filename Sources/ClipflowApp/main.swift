@@ -19,6 +19,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// 不还的话，关掉面板后前台是 Clipflow 自己 —— 用户看到原窗口标题栏变灰，
     /// 而且下一次 ⌘V 会打到空处。这是"生硬"感最主要的来源之一。
     private var previousApp: NSRunningApplication?
+    private var paster: Paster!
+    /// 可观测：上次粘贴等待前台就绪花了多久
+    private(set) var lastPasteWaitMs: Double = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 菜单栏常驻，不进 Dock
@@ -36,9 +39,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         watcher = PasteboardWatcher()
-        let paster = Paster(watcher: watcher)
+        paster = Paster(watcher: watcher)
         model = PanelModel(store: store, paster: paster)
         model.onClose = { [weak self] in self?.hidePanel() }
+        model.onPaste = { [weak self] in self?.pasteToPreviousApp() }
         model.onError = { [weak self] msg in self?.notify(msg) }
 
         AppDelegate.current = self
@@ -181,6 +185,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panel.fadeIn()
         // nonactivating panel 不抢前台，但要激活自己才能收键盘输入
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// 关面板 → 切回原 App → 轮询等它真正到前台 → 合成 ⌘V。
+    ///
+    /// 内容此时已经在剪贴板里了（PanelModel.confirm 第一步就写了），
+    /// 所以哪怕这里任何一步失败，用户手动 ⌘V 也拿得到。
+    private func pasteToPreviousApp() {
+        let target = previousApp
+        // 立刻收起面板。orderOut 而不是等淡出动画 —— 粘贴路径上不留任何等待。
+        panel.orderOut(nil)
+        target?.activate()
+        previousApp = nil
+
+        // 轮询放到后台，别阻塞主线程（合成按键本身不需要在主线程）
+        guard let paster = self.paster else { return }
+        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+            do {
+                let waited = try paster.pasteNow(waitingFor: target)
+                Task { @MainActor in self?.lastPasteWaitMs = waited }
+            } catch {
+                Task { @MainActor in self?.model.reportPasteFailure("\(error)") }
+            }
+        }
     }
 
     private func hidePanel() {

@@ -156,32 +156,42 @@ final class PanelModel: ObservableObject {
 
     /// 选中并粘贴。
     ///
-    /// 先关面板再粘贴：键盘焦点在面板上，不先关的话合成的 ⌘V 会打到面板自己身上。
+    /// **时序按"感知延迟最小"排**，每一步的位置都有理由：
+    ///
+    /// 1. 先把内容写进剪贴板 —— 这一步最快且不依赖任何等待，先做掉。
+    ///    做完这一步，即使后面全失败，用户手动 ⌘V 也能拿到东西。
+    /// 2. 立刻关面板 —— 视觉反馈要在第一时间给出，不能等粘贴完成。
+    /// 3. 切回原 App，**轮询**等它真正到前台（不是固定 sleep）。
+    /// 4. 合成 ⌘V。
+    ///
+    /// 键盘焦点在面板上，必须先关面板，否则合成的 ⌘V 会打到面板自己身上。
     func confirm() {
         guard let item = selectedItem, let id = item.id else { return }
-        onClose?()
+
+        // ① 先取内容并写进剪贴板 —— 放在最前面，因为它最快且是兜底
+        var payload: [(uti: String, data: Data)] = []
+        do {
+            for r in try store.representations(of: id) {
+                if let d = try store.data(of: r), !d.isEmpty { payload.append((r.uti, d)) }
+            }
+            try paster.stage(representations: payload)
+        } catch {
+            onError?("读取失败：\(error)")
+            return
+        }
 
         // 粘过的内容冒到顶部 —— 下次唤出就在手边
         try? store.touch(itemID: id)
 
-        do {
-            let reps = try store.representations(of: id)
-            var payload: [(uti: String, data: Data)] = []
-            for r in reps {
-                if let d = try store.data(of: r), !d.isEmpty { payload.append((r.uti, d)) }
-            }
-            // 等面板淡出 + 前台 App 恢复 key 状态。80ms 是淡出动画(80ms)之后的一帧。
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.09) { [weak self] in
-                guard let self else { return }
-                do {
-                    try self.paster.paste(representations: payload)
-                } catch {
-                    self.paster.copyOnly(representations: payload)
-                    self.onError?("\(error)")
-                }
-            }
-        } catch {
-            onError?("读取失败：\(error)")
-        }
+        // ② 立刻关面板并触发"切回原 App + 粘贴"
+        onPaste?()
+    }
+
+    /// 由 AppDelegate 接管：关面板 → 切回原 App → 轮询就绪 → 合成 ⌘V。
+    /// 放在 AppDelegate 是因为只有它知道"原来那个 App"是谁。
+    var onPaste: (() -> Void)?
+
+    func reportPasteFailure(_ message: String) {
+        onError?(message + "\n\n内容已在剪贴板里，直接按 ⌘V 即可。")
     }
 }

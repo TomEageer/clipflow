@@ -49,46 +49,50 @@ public final class Paster: @unchecked Sendable {
         IsSecureEventInputEnabled()
     }
 
-    /// 把 representation 写回剪贴板并粘贴到前台 App。
+    /// 只写剪贴板，立即返回。与"等前台恢复再合成按键"拆开，是为了让写入不被任何等待挡住。
     ///
-    /// - Parameters:
-    ///   - restoreAfter: 粘贴后是否恢复原剪贴板内容（默认恢复，避免污染用户剪贴板）
-    public func paste(representations: [(uti: String, data: Data)],
-                      restoreAfter: Bool = true) throws {
+    /// **不备份、不恢复原剪贴板**：从历史里选一条粘贴，语义上就等于"重新复制了它"，
+    /// 之后再按 ⌘V 理应还是这条。恢复旧内容会让用户困惑，而且备份需要读全部
+    /// representation —— 那是可能阻塞的操作，白白挡在粘贴路径上。
+    public func stage(representations: [(uti: String, data: Data)]) throws {
         guard !representations.isEmpty else { throw Failure.nothingToPaste }
+        writeToPasteboard(representations)
+        watcher?.suppressNextChange()
+    }
+
+    /// 等目标 App 真正回到前台，然后合成 ⌘V。
+    ///
+    /// ⚠️ **必须轮询，不能固定 sleep。**
+    /// 固定延迟要么太短（按键打到还没切回来的 App 上，粘贴丢失），
+    /// 要么太长（用户感到明显的延迟）。轮询取两者之长：通常 10~30ms 就绪。
+    ///
+    /// - Parameter target: 期望回到前台的 App；nil 表示不等待
+    /// - Returns: 实际等待毫秒数（用于观测）
+    @discardableResult
+    public func pasteNow(waitingFor target: NSRunningApplication?,
+                         timeout: TimeInterval = 0.25) throws -> Double {
         guard Self.hasAccessibilityPermission else { throw Failure.noAccessibilityPermission }
         if Self.isSecureInputEnabled() { throw Failure.secureInputEnabled(byProcess: nil) }
 
-        let pb = NSPasteboard.general
-
-        // ① 备份当前剪贴板（原样保存全部 representation，恢复时才能无损）
-        let backup: [[String: Data]] = restoreAfter ? Self.snapshotForRestore(pb) : []
-
-        // ② 写入目标内容
-        writeToPasteboard(representations)
-
-        // ③ 告诉 watcher 忽略这次由我们自己造成的变更，否则会捕获到自己粘贴的内容形成回声
-        watcher?.suppressNextChange()
-
-        // ④ 合成 Cmd+V
-        Self.sendCommandV()
-
-        // ⑤ 延迟恢复原剪贴板。
-        //    必须延迟：目标 App 是异步读取剪贴板的，立刻恢复会让它读到旧内容。
-        if restoreAfter, !backup.isEmpty {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak watcher] in
-                let pb = NSPasteboard.general
-                pb.clearContents()
-                for itemDict in backup {
-                    let item = NSPasteboardItem()
-                    for (uti, data) in itemDict {
-                        item.setData(data, forType: NSPasteboard.PasteboardType(uti))
-                    }
-                    pb.writeObjects([item])
+        let t0 = CFAbsoluteTimeGetCurrent()
+        if let target {
+            let deadline = t0 + timeout
+            while CFAbsoluteTimeGetCurrent() < deadline {
+                if NSWorkspace.shared.frontmostApplication?.processIdentifier == target.processIdentifier {
+                    break
                 }
-                watcher?.suppressNextChange()
+                // 2ms 一次。比起固定 90ms，这里最坏也就多花几毫秒。
+                usleep(2000)
             }
         }
+        Self.sendCommandV()
+        return (CFAbsoluteTimeGetCurrent() - t0) * 1000
+    }
+
+    /// 一步到位（保留给不关心时序的调用方）
+    public func paste(representations: [(uti: String, data: Data)]) throws {
+        try stage(representations: representations)
+        try pasteNow(waitingFor: nil)
     }
 
     /// 只放进剪贴板，不合成按键。无权限时的降级路径。

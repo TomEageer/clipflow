@@ -625,3 +625,61 @@ struct ListBehaviorTests {
         #expect(try store.recent().first?.preview != "很老的条目")
     }
 }
+
+// MARK: - 粘贴语义
+
+@Suite("粘贴语义")
+struct PasteSemanticsTests {
+
+    private func tempStore() throws -> (ClipflowStore, URL) {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "clipflow-test-\(UUID().uuidString)")
+        return (try ClipflowStore(paths: StoragePaths(root: dir)), dir)
+    }
+    private func snap(_ t: String) -> RawSnapshot {
+        RawSnapshot(representations: [("public.utf8-plain-text", Data(t.utf8))])
+    }
+
+    /// 从历史里粘贴一条，语义上等于"重新复制了它"：
+    /// 它要冒到列表顶部，之后再按 ⌘V 也应该还是这条（不恢复旧剪贴板）。
+    @Test("粘贴后该条置顶且 useCount 增加")
+    func pasteActsLikeRecopy() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+
+        let target = try #require(try ingest.ingest(snap("要粘贴的老内容")))
+        for i in 0..<4 { try ingest.ingest(snap("后来的 \(i)")) }
+        #expect(try store.recent().first?.preview != "要粘贴的老内容")
+
+        try store.touch(itemID: target)
+
+        let top = try #require(try store.recent().first)
+        #expect(top.preview == "要粘贴的老内容")
+        #expect(top.useCount >= 1)
+    }
+
+    /// 粘贴路径上不能有"备份整个剪贴板"这种可能阻塞的操作。
+    /// 读剪贴板实测可阻塞秒级，挡在粘贴前会直接毁掉手感。
+    @Test("Paster 不再备份/恢复剪贴板")
+    func noClipboardRestore() throws {
+        let p = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "Sources/ClipflowCapture/Paster.swift")
+        let s = try String(contentsOf: p, encoding: .utf8)
+        #expect(!s.contains("restoreAfter"), "还留着恢复旧剪贴板的逻辑")
+        #expect(s.contains("waitingFor"), "缺少『轮询等前台就绪』的接口")
+    }
+
+    /// 固定 sleep 要么太短（按键打到还没切回来的 App 上）要么太长（用户感到延迟）。
+    /// 必须轮询前台 App。
+    @Test("等待前台用轮询而非固定 sleep")
+    func pollsInsteadOfSleeping() throws {
+        let p = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "Sources/ClipflowCapture/Paster.swift")
+        let s = try String(contentsOf: p, encoding: .utf8)
+        #expect(s.contains("frontmostApplication"), "没有轮询前台 App")
+        #expect(!s.contains("asyncAfter(deadline: .now() + 0.6)"), "还有固定 600ms 延迟")
+    }
+}
