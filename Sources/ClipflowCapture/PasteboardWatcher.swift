@@ -162,14 +162,15 @@ public final class PasteboardWatcher: ClipSource, @unchecked Sendable {
 
     /// 读取当前剪贴板的全部 representation。
     ///
+    /// **保真优先：默认读所有类型**（与 Maccy 一致）。只做两件事：
+    /// ① 过滤已被真实 issue 证明有害的类型（`TypePolicy`）
+    /// ② 加一层看门狗，兜住"拥有者进程已退出/挂死、promise 无人兑现"的边缘情况
+    ///
     /// ⚠️ 必须在 changeCount 变更后**立即**读：部分 App 用 lazy pasteboard provider，
     /// 内容是被读取时才生成的，读取时机错了就拿到空。
     ///
-    /// ⚠️ 必须分级读取，绝不能"把广告的类型全读一遍"——
-    /// 那样一次带格式的复制就会冻住二十多秒。根因与实测数据见 `TypePolicy`。
-    ///
-    /// 读取顺序也有意义：**可信类型先读**，保证即使后面撞上未知坏类型耗光预算，
-    /// 核心保真数据也已经拿到手了。
+    /// 注：早期曾把 `public.utf16-external-plain-text` 当成"系统缺陷"跳过，那是错的
+    /// —— 根因是测试写入进程没跑 run loop。详见 `TypePolicy` 的说明。
     public static func snapshot(from pb: NSPasteboard, maxBytes: Int) -> RawSnapshot? {
         guard let items = pb.pasteboardItems, !items.isEmpty else { return nil }
 
@@ -179,36 +180,17 @@ public final class PasteboardWatcher: ClipSource, @unchecked Sendable {
         let cache = NegativeTypeCache.shared
 
         for item in items {
-            // 分两轮：可信类型优先，未知类型垫后
-            let all = item.types
-            let trusted = all.filter { TypePolicy.classify($0.rawValue) == .trusted }
-            let unknown = all.filter { TypePolicy.classify($0.rawValue) == .unknown }
-            // .skip 级别的直接不进循环
-
-            // ── 第一轮：可信类型，直接读、不设看门狗
-            // 不设超时是刻意的：大图的合法读取可能超过任何短阈值，设了反而误伤真数据。
-            for type in trusted {
-                guard let data = item.data(forType: type) else {
-                    // 空 data 的类型要保留 —— concealed 标记就是「只有类型没有内容」的标志位
-                    reps.append((type.rawValue, Data()))
-                    continue
-                }
-                total += data.count
-                if total > maxBytes { break }
-                reps.append((type.rawValue, data))
-            }
-
-            // ── 第二轮：未知类型，看门狗保护 + 负缓存自学习
-            // 保留这一轮是为了冷门 App 私有格式的保真，不能因噎废食全砍掉。
-            for type in unknown {
+            for type in item.types {
+                guard TypePolicy.shouldRead(type.rawValue) else { continue }
                 if cache.isBad(type.rawValue) { continue }
                 if CFAbsoluteTimeGetCurrent() - started > TypePolicy.totalReadBudget { break }
 
-                switch readWithTimeout(item, type, timeout: TypePolicy.unknownTypeTimeout) {
+                switch readWithTimeout(item, type, timeout: TypePolicy.readTimeout) {
                 case .timedOut:
-                    // 学会了：本会话之后再也不试这个类型
+                    // 边缘情况：拥有者挂了。记下来本会话不再试。
                     cache.markBad(type.rawValue)
                 case .value(nil):
+                    // 空 data 的类型要保留 —— concealed 标记就是「只有类型没有内容」的标志位
                     reps.append((type.rawValue, Data()))
                 case .value(let data?):
                     total += data.count

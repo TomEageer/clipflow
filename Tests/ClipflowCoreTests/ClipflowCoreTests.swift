@@ -397,7 +397,7 @@ struct CaptureContractTests {
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appending(path: "Sources/ClipflowCapture/PasteboardWatcher.swift")
         let ws = try String(contentsOf: w, encoding: .utf8)
-        #expect(ws.contains("TypePolicy.classify"), "Watcher 没走分级策略")
+        #expect(ws.contains("TypePolicy.shouldRead"), "Watcher 没走类型策略")
         #expect(ws.contains("NegativeTypeCache"), "Watcher 没接负缓存")
     }
 }
@@ -414,37 +414,54 @@ struct TypePolicyTests {
         return try String(contentsOf: p, encoding: .utf8)
     }
 
-    /// 根因：只要剪贴板上有 RTF，macOS 就广告一个谁都兑现不了的
-    /// public.utf16-external-plain-text，首读阻塞 18.5~23.8 秒后返回 badPasteboardFlavorErr。
-    /// 三种写入方式全复现，含 NSAttributedString（TextEdit/浏览器/飞书的标准写法）。
-    @Test("已知不可兑现类型必须在种子列表里")
-    func knownBadSeeded() throws {
+    /// ⚠️ 回归测试：曾经把 public.utf16-external-plain-text 当成"系统缺陷"跳过，
+    /// 那是错的 —— 它是正常的 lazy promise，含真数据（实测 1522B），
+    /// 跳过会造成保真度倒退。根因是当时的测试写入进程没跑 run loop。
+    ///
+    /// 这条测试守着：**不许再把它列进任何过滤名单**。
+    @Test("不得跳过 public.utf16-external-plain-text（曾误判，含真数据）")
+    func doesNotSkipLegitimateType() throws {
         let s = try policySource()
-        #expect(s.contains("public.utf16-external-plain-text"))
-        #expect(s.contains("knownUnfulfillable"))
+        let inFilter = s.contains("harmfulTypes: Set<String> = [")
+            && s.range(of: #"harmfulTypes[^\]]*utf16-external"#, options: .regularExpression) != nil
+        #expect(!inFilter, "utf16-external-plain-text 被重新加进过滤名单了 —— 它含真数据，跳过会掉保真度")
+
+        let w = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "Sources/ClipflowCapture/PasteboardWatcher.swift")
+        let ws = try String(contentsOf: w, encoding: .utf8)
+        // Watcher 里也不许出现硬编码跳过
+        #expect(!ws.contains("skippedTypes"), "Watcher 里出现了硬编码跳过列表")
     }
 
-    /// 可信类型不设看门狗是刻意的：大图合法读取可能超过任何短阈值，
-    /// 设了超时反而把真数据误判成坏类型丢掉。
-    @Test("可信类型列表覆盖核心保真格式")
-    func trustedCoversCore() throws {
+    /// 过滤规则必须有真实依据（Maccy 的 issue 编号），不能凭推测加
+    @Test("有害类型过滤只保留有真实依据的几条")
+    func harmfulFiltersAreEvidenceBased() throws {
         let s = try policySource()
-        for uti in ["public.utf8-plain-text", "public.rtf", "public.html",
-                    "public.png", "public.tiff", "public.file-url"] {
-            #expect(s.contains(uti), "可信列表缺 \(uti)")
-        }
+        #expect(s.contains("dyn."), "缺 dyn.* 动态类型过滤")
+        #expect(s.contains("microsoft"), "缺 Word 链接源过滤（Maccy #613/#770）")
     }
 
-    /// 硬编码列表列不全各家 App 的私有 UTI，负缓存才是正确性依赖。
-    @Test("必须有负缓存自学习，不能只靠硬编码列表")
-    func negativeCacheExists() throws {
+    /// 看门狗现在只是边缘情况兜底（拥有者进程退出/挂死），不是主要机制。
+    /// 阈值必须够宽松 —— 太短会把大图的合法读取误判成坏类型丢掉。
+    @Test("看门狗保留为兜底，且阈值不过短")
+    func watchdogIsGenerous() throws {
         let s = try policySource()
+        #expect(s.contains("readTimeout"))
+        #expect(s.contains("totalReadBudget"))
         #expect(s.contains("NegativeTypeCache"))
-        #expect(s.contains("markBad"))
-        #expect(s.contains("totalReadBudget"), "缺少单次快照总读取预算")
+        // 阈值 >= 1 秒
+        let ok = s.contains("readTimeout: TimeInterval = 2.0") || s.contains("readTimeout: TimeInterval = 1")
+        #expect(ok, "看门狗阈值过短，会误伤大图的合法读取")
     }
 
-    /// 启动前复制的内容不该永久丢失
+    /// 错误结论必须留在代码里，防止后人重蹈覆辙
+    @Test("被推翻的错误结论要有记录")
+    func documentsTheRefutedConclusion() throws {
+        let s = try policySource()
+        #expect(s.contains("run loop"), "缺少『测试进程未跑 run loop 才是根因』的记录")
+    }
+
     @Test("启动时捕获现有剪贴板内容")
     func captureOnStart() throws {
         let p = URL(fileURLWithPath: #filePath)
