@@ -2,7 +2,7 @@ import Foundation
 import GRDB
 
 /// 条目类型。按「剪贴板实际给了我们什么」分，不按用户直觉的文件类型分。
-public enum ClipKind: Int, Codable, Sendable, CaseIterable, DatabaseValueConvertible {
+public enum ClipKind: Int, Codable, Sendable, CaseIterable, DatabaseValueConvertible, Comparable {
     case text = 0
     case richText = 1
     case url = 2
@@ -11,6 +11,9 @@ public enum ClipKind: Int, Codable, Sendable, CaseIterable, DatabaseValueConvert
     case color = 5
     case code = 6
     case other = 99
+
+    /// 供表格按列排序用
+    public static func < (a: ClipKind, b: ClipKind) -> Bool { a.label < b.label }
 
     public var label: String {
         switch self {
@@ -92,6 +95,10 @@ public struct ClipItem: Codable, Sendable, FetchableRecord, MutablePersistableRe
     public mutating func didInsert(_ inserted: InsertionSuccess) {
         id = inserted.rowID
     }
+
+    /// 表格排序用的非可选来源名。KeyPathComparator 对可选值的排序语义不直观，
+    /// 给一个确定的字符串更可控。
+    public var sourceLabel: String { sourceAppName ?? sourceBundleID ?? "" }
 }
 
 /// 一个 representation = 剪贴板上的一种格式（public.rtf / public.html / public.png …）。

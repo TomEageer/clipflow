@@ -56,7 +56,6 @@ final class SettingsModel: ObservableObject {
     @Published private(set) var items: [ClipItem] = []
     @Published private(set) var breakdown: [(kind: ClipKind, count: Int, bytes: Int)] = []
     @Published private(set) var stats: ClipflowStore.Stats?
-    @Published var sort: ClipflowStore.SortOrder = .recentlyUsed { didSet { refreshList() } }
     @Published var kindFilter: ClipKind? { didSet { refreshList() } }
     @Published var query: String = "" { didSet { refreshList() } }
     @Published var selected: Set<ClipItem.ID> = []
@@ -85,7 +84,7 @@ final class SettingsModel: ObservableObject {
     }
 
     func refreshList() {
-        items = (try? store.browse(sort: sort, kind: kindFilter, query: query)) ?? []
+        items = (try? store.browse(sort: .recentlyUsed, kind: kindFilter, query: query)) ?? []
         selected = selected.filter { id in items.contains { $0.id == id } }
     }
 
@@ -122,6 +121,25 @@ final class SettingsModel: ObservableObject {
         refresh()
         let f = ByteCountFormatter()
         lastAction = "回收孤儿附件 \(v.0) 个，释放 \(f.string(fromByteCount: Int64(v.1)))"
+    }
+
+    private var thumbCache: [String: NSImage] = [:]
+
+    func thumbnail(for item: ClipItem) -> NSImage? {
+        guard item.kind == .image else { return nil }
+        if let c = thumbCache[item.contentHash] { return c }
+        guard let png = store.thumbnail(for: item), let img = NSImage(data: png) else { return nil }
+        if thumbCache.count > 400 { thumbCache.removeAll(keepingCapacity: true) }
+        thumbCache[item.contentHash] = img
+        return img
+    }
+
+    func formatSummary(for item: ClipItem) -> String {
+        guard let id = item.id, let reps = try? store.representations(of: id) else { return "" }
+        let f = ByteCountFormatter()
+        return reps.sorted { $0.byteSize > $1.byteSize }.prefix(4)
+            .map { "\($0.uti.replacingOccurrences(of: "public.", with: "")) \(f.string(fromByteCount: Int64($0.byteSize)))" }
+            .joined(separator: "  ")
     }
 
     func revealDataFolder() {
@@ -263,68 +281,196 @@ private struct GeneralTab: View {
 private struct HistoryTab: View {
     @ObservedObject var model: SettingsModel
 
+    /// 列头点击排序。默认按「最近使用」倒序 —— 和面板一致。
+    @State private var sortOrder: [KeyPathComparator<ClipItem>] = [
+        KeyPathComparator(\ClipItem.usedSeq, order: .reverse)
+    ]
+
+    private var rows: [ClipItem] { model.items.sorted(using: sortOrder) }
+
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                TextField("搜索…", text: $model.query)
-                    .textFieldStyle(.roundedBorder).frame(width: 200)
-
-                Picker("", selection: $model.sort) {
-                    ForEach(ClipflowStore.SortOrder.allCases, id: \.self) { Text($0.label).tag($0) }
-                }.frame(width: 120)
-
-                Picker("", selection: $model.kindFilter) {
-                    Text("全部类型").tag(ClipKind?.none)
-                    ForEach(ClipKind.allCases, id: \.self) { k in
-                        Text(k.label).tag(ClipKind?.some(k))
-                    }
-                }.frame(width: 110)
-
-                Spacer()
-
-                Button("删除选中 (\(model.selected.count))") { model.deleteSelected() }
-                    .disabled(model.selected.isEmpty)
-                Menu("清空…") {
-                    Button("清空全部（保留置顶）") { model.deleteAll(keepPinned: true) }
-                    Button("清空全部（含置顶）", role: .destructive) { model.deleteAll(keepPinned: false) }
-                }.frame(width: 80)
-            }
-            .padding(10)
-
+            toolbar
             Divider()
 
-            Table(model.items, selection: $model.selected) {
-                TableColumn("内容") { item in
-                    HStack(spacing: 5) {
-                        if item.pinned { Image(systemName: "pin.fill").font(.system(size: 8)) }
-                        if item.sensitivity == .sensitive {
-                            Image(systemName: "lock.fill").font(.system(size: 8)).foregroundStyle(.orange)
+            Table(rows, selection: $model.selected, sortOrder: $sortOrder) {
+                TableColumn("内容", value: \.preview) { item in
+                    HStack(spacing: 7) {
+                        thumbOrIcon(item)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(item.preview.replacingOccurrences(of: "\n", with: " "))
+                                .lineLimit(1)
+                            if item.pinned || item.sensitivity == .sensitive {
+                                HStack(spacing: 5) {
+                                    if item.pinned {
+                                        Label("置顶", systemImage: "pin.fill")
+                                    }
+                                    if item.sensitivity == .sensitive {
+                                        Label("敏感", systemImage: "lock.fill")
+                                            .foregroundStyle(.orange)
+                                    }
+                                }
+                                .font(.system(size: 9))
+                                .labelStyle(.titleAndIcon)
+                            }
                         }
-                        Text(item.preview.replacingOccurrences(of: "\n", with: " ")).lineLimit(1)
                     }
-                }
-                TableColumn("类型") { Text($0.kind.label) }.width(56)
-                TableColumn("来源") { Text($0.sourceAppName ?? "—") }.width(110)
-                TableColumn("大小") { item in
+                    .padding(.vertical, 2)
+                }.width(min: 240, ideal: 330)
+
+                TableColumn("类型", value: \.kind) { item in
+                    Text(item.kind.label).foregroundStyle(.secondary)
+                }.width(56)
+
+                TableColumn("来源", value: \.sourceLabel) { item in
+                    Text(item.sourceLabel.isEmpty ? "—" : item.sourceLabel)
+                        .lineLimit(1).foregroundStyle(.secondary)
+                }.width(min: 90, ideal: 120)
+
+                TableColumn("大小", value: \.byteSize) { item in
                     Text(ByteCountFormatter().string(fromByteCount: Int64(item.byteSize)))
+                        .monospacedDigit()
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .foregroundStyle(.secondary)
                 }.width(74)
-                TableColumn("用过") { Text("\($0.useCount) 次") }.width(52)
-                TableColumn("时间") { item in
-                    Text(item.createdAt.formatted(date: .numeric, time: .shortened))
-                }.width(120)
+
+                TableColumn("用过", value: \.useCount) { item in
+                    Text(item.useCount == 0 ? "—" : "\(item.useCount)")
+                        .monospacedDigit()
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .foregroundStyle(.secondary)
+                }.width(46)
+
+                TableColumn("时间", value: \.createdAt) { item in
+                    Text(Self.stamp(item.createdAt))
+                        .monospacedDigit().foregroundStyle(.secondary)
+                }.width(112)
             }
-            .tableStyle(.inset)
+            .tableStyle(.inset(alternatesRowBackgrounds: true))
 
             Divider()
-            HStack {
-                Text("\(model.items.count) 条")
-                Spacer()
-                Text("⌘ 点击多选 · ⇧ 点击连选")
-            }
-            .font(.system(size: 10)).foregroundStyle(.secondary)
-            .padding(.horizontal, 12).padding(.vertical, 6)
+            detailBar
         }
         .onAppear { model.refresh() }
+    }
+
+    // MARK: 工具栏
+
+    private var toolbar: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 4) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                TextField("搜索内容…", text: $model.query)
+                    .textFieldStyle(.plain)
+            }
+            .padding(.horizontal, 7).padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 6).fill(.quaternary.opacity(0.5)))
+            .frame(width: 230)
+
+            Picker("", selection: $model.kindFilter) {
+                Text("全部类型").tag(ClipKind?.none)
+                Divider()
+                ForEach(ClipKind.allCases, id: \.self) { k in
+                    Text(k.label).tag(ClipKind?.some(k))
+                }
+            }
+            .labelsHidden().frame(width: 108)
+
+            Spacer()
+
+            Button(role: .destructive) { model.deleteSelected() } label: {
+                Label("删除", systemImage: "trash")
+            }
+            .disabled(model.selected.isEmpty)
+            .help("删除选中的 \(model.selected.count) 条")
+
+            Menu {
+                Button("清空全部（保留置顶）") { model.deleteAll(keepPinned: true) }
+                Button("清空全部（含置顶）", role: .destructive) { model.deleteAll(keepPinned: false) }
+            } label: {
+                Label("清空", systemImage: "trash.slash")
+            }
+            .menuStyle(.borderlessButton).fixedSize()
+        }
+        .padding(.horizontal, 12).padding(.vertical, 9)
+    }
+
+    // MARK: 底部详情
+
+    private var detailBar: some View {
+        HStack(spacing: 10) {
+            if let item = selectedItem {
+                thumbOrIcon(item, size: 30)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.preview.replacingOccurrences(of: "\n", with: " "))
+                        .font(.system(size: 11)).lineLimit(2)
+                    Text(model.formatSummary(for: item))
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(.tertiary).lineLimit(1)
+                }
+                Spacer()
+                Text(item.createdAt.formatted(date: .abbreviated, time: .standard))
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            } else {
+                Text("\(model.items.count) 条")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                Spacer()
+                Text("⌘ 点击多选 · ⇧ 点击连选 · 点列头排序")
+                    .font(.system(size: 10)).foregroundStyle(.tertiary)
+            }
+        }
+        .frame(height: 44)
+        .padding(.horizontal, 12)
+        .background(.quaternary.opacity(0.25))
+    }
+
+    private var selectedItem: ClipItem? {
+        guard model.selected.count == 1, let id = model.selected.first else { return nil }
+        return model.items.first { $0.id == id }
+    }
+
+    // MARK: 小件
+
+    @ViewBuilder
+    private func thumbOrIcon(_ item: ClipItem, size: CGFloat = 20) -> some View {
+        if let t = model.thumbnail(for: item) {
+            Image(nsImage: t)
+                .resizable().aspectRatio(contentMode: .fill)
+                .frame(width: size * 1.3, height: size)
+                .clipShape(RoundedRectangle(cornerRadius: 3))
+                .overlay(RoundedRectangle(cornerRadius: 3)
+                    .strokeBorder(.primary.opacity(0.1), lineWidth: 0.5))
+        } else {
+            Image(systemName: icon(for: item.kind))
+                .font(.system(size: size * 0.6))
+                .frame(width: size * 1.3, height: size)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func icon(for kind: ClipKind) -> String {
+        switch kind {
+        case .image: return "photo"
+        case .fileRef: return "doc"
+        case .url: return "link"
+        case .code: return "chevron.left.forwardslash.chevron.right"
+        case .richText: return "textformat"
+        case .color: return "paintpalette"
+        default: return "text.alignleft"
+        }
+    }
+
+    /// 今天只显示时分，其余显示月日 —— 完整日期时间会被列宽截断，反而看不清
+    static func stamp(_ d: Date) -> String {
+        let cal = Calendar.current
+        let f = DateFormatter()
+        if cal.isDateInToday(d) { f.dateFormat = "今天 HH:mm" }
+        else if cal.isDateInYesterday(d) { f.dateFormat = "昨天 HH:mm" }
+        else if cal.component(.year, from: d) == cal.component(.year, from: Date()) {
+            f.dateFormat = "M月d日 HH:mm"
+        } else { f.dateFormat = "yyyy/M/d HH:mm" }
+        return f.string(from: d)
     }
 }
 
