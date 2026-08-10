@@ -356,3 +356,44 @@ struct ArchitectureTests {
         }
     }
 }
+
+// MARK: - 捕获层约束（不依赖 AppKit 的部分）
+
+@Suite("捕获层约束")
+struct CaptureContractTests {
+
+    /// 捕获层必须独立于 Core —— NSPasteboard 在 AppKit 里，而 Core 禁 import AppKit
+    @Test("ClipflowCapture 独立成 target，Core 不得依赖它")
+    func captureIsSeparate() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let capture = root.appending(path: "Sources/ClipflowCapture")
+        #expect(FileManager.default.fileExists(atPath: capture.path),
+                "ClipflowCapture target 不存在")
+
+        // Core 里不许出现对 Capture 的引用
+        let core = root.appending(path: "Sources/ClipflowCore")
+        let e = try #require(FileManager.default.enumerator(at: core, includingPropertiesForKeys: nil))
+        for case let f as URL in e where f.pathExtension == "swift" {
+            let text = try String(contentsOf: f, encoding: .utf8)
+            #expect(!text.contains("import ClipflowCapture"),
+                    "\(f.lastPathComponent) 反向依赖了捕获层")
+        }
+    }
+
+    /// 阻塞类型的跳过列表必须存在且包含实测确认的元凶。
+    ///
+    /// 实测：跨进程读 public.utf16-external-plain-text 阻塞 18493ms 后返回 nil。
+    /// 少了这条，一次普通富文本复制就会冻住捕获十几秒。
+    @Test("承诺型阻塞类型必须在跳过列表里")
+    func skipListCoversKnownBlocker() throws {
+        let src = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "Sources/ClipflowCapture/PasteboardWatcher.swift")
+        let text = try String(contentsOf: src, encoding: .utf8)
+        #expect(text.contains("public.utf16-external-plain-text"),
+                "跳过列表缺少实测确认会阻塞 18.5 秒的类型")
+        #expect(text.contains("perTypeTimeout"),
+                "缺少单类型读取超时看门狗 —— 跳过列表列不全所有阻塞类型")
+    }
+}

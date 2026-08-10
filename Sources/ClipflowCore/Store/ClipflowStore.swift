@@ -126,6 +126,12 @@ public final class ClipflowStore: Sendable {
         }
     }
 
+    public func item(id: Int64) throws -> ClipItem? {
+        try contentPool.read { db in
+            try ClipItem.fetchOne(db, sql: "SELECT * FROM items WHERE id = ?", arguments: [id])
+        }
+    }
+
     public func representations(of itemID: Int64) throws -> [Representation] {
         try contentPool.read { db in
             try Representation.fetchAll(db, sql:

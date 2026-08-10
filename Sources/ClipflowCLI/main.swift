@@ -1,5 +1,6 @@
 import Foundation
 import ClipflowCore
+import ClipflowCapture
 
 // clipflow-cli 不是附赠品 —— 它是「ClipflowCore 真的零 UI 依赖」的强制验证。
 // 这个二进制不 import AppKit/SwiftUI，能跑通就证明核心解耦成立。
@@ -188,6 +189,116 @@ do {
             print("\(flag) \(f.lastPathComponent) 权限 \(String(perm, radix: 8))")
         }
 
+    case "poll":
+        // 同步轮询 N 秒。不走 AsyncStream，用来隔离「捕获逻辑」与「异步层」的问题。
+        setvbuf(stdout, nil, _IOLBF, 0)
+        let seconds = Double(args.first ?? "") ?? 10
+        let watcher = PasteboardWatcher()
+        print("▶ 同步轮询 \(Int(seconds))s（200ms 一次）")
+        let deadline = Date().addingTimeInterval(seconds)
+        var n = 0
+        while Date() < deadline {
+            if let snap = watcher.pollOnce() {
+                n += 1
+                let utis = snap.representations.map(\.uti)
+                let bytes = snap.representations.reduce(0) { $0 + $1.data.count }
+                let app = snap.sourceAppName ?? snap.sourceBundleID ?? "?"
+                if let id = (try? ingest.ingest(snap)) ?? nil {
+                    // 必须按 id 取回，不能用 recent(1)：去重命中时 createdAt 不变，
+                    // recent(1) 会取到别的条目，显示与实际写入的对不上。
+                    let item = (try? store.item(id: id)) ?? nil
+                    print("  #\(id) [\(item?.kind.label ?? "?")]"
+                          + "\(item?.sensitivity == .sensitive ? " 🔒" : "") \(app) · "
+                          + "\(utis.count) 种格式 · \(fmtBytes(bytes))")
+                    print("      \(oneLine(item?.preview ?? "", 60))")
+                    if utis.count > 1 { print("      \(utis.prefix(5).joined(separator: ", "))") }
+                } else {
+                    print("  ⊘ 拦截 (\(app)) · \(utis.prefix(3).joined(separator: ", "))")
+                }
+            }
+            usleep(200_000)
+        }
+        print("\n共 \(n) 次变更")
+
+    case "watch":
+        // M1 主命令：真正开始记录你复制的内容。
+        // macOS 没有剪贴板变更通知，只能轮询 changeCount。
+        // 输出重定向到文件/管道时 stdout 默认是全缓冲（4KB），长驻进程的日志会卡在缓冲区里。
+        // 改行缓冲，保证 `clipflow watch | tee` 和后台重定向都能实时看到。
+        setvbuf(stdout, nil, _IOLBF, 0)
+
+        let watcher = PasteboardWatcher()
+        print("▶ 开始监听剪贴板（Ctrl+C 停止）")
+        print("  轮询 200ms · 空闲 60s 后降到 1s · 密码管理器内容会被拦截\n")
+
+        // 计数器要跨线程读写（消费任务写、信号处理器读），用带锁的引用类型。
+        final class Counters: @unchecked Sendable {
+            private let lock = NSLock()
+            private var _seen = 0, _stored = 0, _blocked = 0
+            func seen()    { lock.lock(); _seen += 1; lock.unlock() }
+            func stored()  { lock.lock(); _stored += 1; lock.unlock() }
+            func blocked() { lock.lock(); _blocked += 1; lock.unlock() }
+            var snapshot: (Int, Int, Int) {
+                lock.lock(); defer { lock.unlock() }; return (_seen, _stored, _blocked)
+            }
+        }
+        let counters = Counters()
+        let sem = DispatchSemaphore(value: 0)
+
+        // ⚠️ 必须用 Task.detached。
+        //    main.swift 的顶层代码是 @MainActor，普通 `Task {}` 会**继承 MainActor 隔离**；
+        //    而下面 sem.wait() 阻塞了主线程 → 这个 Task 永远排不上执行，静默什么都不干。
+        //    （同步版 `poll` 没有这层，所以它一直是好的 —— 正是靠这个对照定位到本 bug。）
+        let task = Task.detached {
+            for await snap in watcher.start() {
+                counters.seen()
+                let utis = snap.representations.map(\.uti)
+                let bytes = snap.representations.reduce(0) { $0 + $1.data.count }
+                let app = snap.sourceAppName ?? snap.sourceBundleID ?? "?"
+
+                if let id = (try? ingest.ingest(snap)) ?? nil {
+                    counters.stored()
+                    // 必须按 id 取回，不能用 recent(1)：去重命中时 createdAt 不变，
+                    // recent(1) 会取到别的条目，显示与实际写入的对不上。
+                    let item = (try? store.item(id: id)) ?? nil
+                    let kind = item?.kind.label ?? "?"
+                    let sens = item?.sensitivity == .sensitive ? " 🔒敏感" : ""
+                    let kb = ByteCountFormatter().string(fromByteCount: Int64(bytes))
+                    print("  #\(id) [\(kind)]\(sens) \(app) · \(utis.count) 种格式 · \(kb)")
+                    print("      \(Formatting.oneLine(item?.preview ?? "", 64))")
+                    if utis.count > 1 {
+                        print("      格式: \(utis.prefix(6).joined(separator: ", "))\(utis.count > 6 ? " …" : "")")
+                    }
+                } else {
+                    counters.blocked()
+                    print("  ⊘ 已拦截（\(app)）· \(utis.prefix(3).joined(separator: ", "))")
+                }
+            }
+            sem.signal()
+        }
+
+        // ⚠️ 信号源不能挂在 .main：下面 sem.wait() 会阻塞主线程，
+        //    排在 main queue 上的 handler 永远轮不到执行 —— Ctrl+C 会失效。
+        signal(SIGINT, SIG_IGN)
+        signal(SIGTERM, SIG_IGN)
+        let sigQueue = DispatchQueue(label: "clipflow.signal")
+        var sources: [DispatchSourceSignal] = []
+        for sig in [SIGINT, SIGTERM] {
+            let src = DispatchSource.makeSignalSource(signal: sig, queue: sigQueue)
+            src.setEventHandler {
+                let (sn, st, bl) = counters.snapshot
+                print("\n停止。本次捕获 \(sn) 次变更，写入 \(st) 条，拦截 \(bl) 条。")
+                fflush(stdout)
+                watcher.stop()
+                task.cancel()
+                exit(0)
+            }
+            src.resume()
+            sources.append(src)
+        }
+        defer { sources.forEach { $0.cancel() } }
+        sem.wait()
+
     case "bench":
         // 预热后重复测量，区分「首次连接开销」与「稳态查询耗时」。
         // 对照 docs/00 §4 的性能预算：搜索首屏 P95 < 16ms。
@@ -242,4 +353,19 @@ do {
 } catch {
     FileHandle.standardError.write(Data("错误: \(error)\n".utf8))
     exit(1)
+}
+
+// detached task 里不能调 @MainActor 的 helper，这里提供一份无隔离版本。
+enum Formatting {
+    static func oneLine(_ s: String, _ max: Int = 68) -> String {
+        let flat = s.replacingOccurrences(of: "\n", with: "⏎ ")
+            .replacingOccurrences(of: "\t", with: " ")
+        var width = 0, out = ""
+        for ch in flat {
+            let w = (ch.unicodeScalars.first.map { $0.value > 0x2E80 } ?? false) ? 2 : 1
+            if width + w > max { out += "…"; break }
+            out.append(ch); width += w
+        }
+        return out
+    }
 }
