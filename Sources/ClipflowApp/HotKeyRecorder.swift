@@ -102,6 +102,8 @@ struct HotKeyRecorderView: NSViewRepresentable {
             combo = c
             onChange(c)
         }
+        b.onSuspendHotKey = { AppDelegate.suspendHotKey() }
+        b.onRestoreHotKey = { _ = AppDelegate.resumeHotKey() }
         return b
     }
 
@@ -114,8 +116,17 @@ struct HotKeyRecorderView: NSViewRepresentable {
 final class RecorderButton: NSButton {
     var combo: HotKeyCombo = .default
     var onChange: ((HotKeyCombo) -> Void)?
+    /// 录制开始前注销全局热键，取消时恢复
+    var onSuspendHotKey: (() -> Void)?
+    var onRestoreHotKey: (() -> Void)?
     private var recording = false
     private var monitor: Any?
+
+    /// 录制中途窗口被切走时兜底恢复，别把用户卡在"全局热键消失"的状态
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil, recording { stop(restoring: true) }
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -132,30 +143,38 @@ final class RecorderButton: NSButton {
     }
 
     @objc private func toggleRecording() {
-        recording ? stop() : start()
+        recording ? stop(restoring: true) : start()
     }
 
     private func start() {
         recording = true
         refreshTitle()
-        // local monitor 才能在本 App 窗口里拦到按键；录制期间要吃掉所有 keyDown
+
+        // ⚠️ 必须先注销全局热键。Carbon 的 RegisterEventHotKey 在系统层就把按键吃掉，
+        //    local monitor 根本收不到 —— 想录 ⌘⇧V 会直接把剪贴板面板唤出来。
+        onSuspendHotKey?()
+
+        // 录制期间吃掉所有 keyDown，避免误触发窗口里别的控件
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
             guard let self else { return event }
-            if event.keyCode == UInt16(kVK_Escape) { self.stop(); return nil }
+            if event.keyCode == UInt16(kVK_Escape) {
+                self.stop(restoring: true)          // 取消：恢复原来的热键
+                return nil
+            }
             if let c = HotKeyCombo(event: event) {
                 self.combo = c
+                self.stop(restoring: false)         // 先摘监听再注册，避免时序交叉
                 self.onChange?(c)
-                self.stop()
             }
-            // 没带修饰键的按键不接受，但也不放行，避免误触发别的控件
             return nil
         }
     }
 
-    private func stop() {
+    private func stop(restoring: Bool) {
         recording = false
         if let m = monitor { NSEvent.removeMonitor(m) }
         monitor = nil
         refreshTitle()
+        if restoring { onRestoreHotKey?() }
     }
 }

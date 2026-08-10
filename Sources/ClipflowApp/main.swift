@@ -10,7 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var panel: ClipPanel!
     private var model: PanelModel!
-    private var hotKey: HotKey?
+    fileprivate var hotKey: HotKey?
     private var watcher: PasteboardWatcher!
     private var store: ClipflowStore!
     private var captureTask: Task<Void, Never>?
@@ -254,6 +254,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     static func applyHotKeyGlobally(_ combo: HotKeyCombo) -> Bool {
         current?.applyHotKey(combo) ?? false
+    }
+
+    /// 录制新快捷键期间必须先注销全局热键。
+    ///
+    /// Carbon 的 RegisterEventHotKey 在**系统层**就把按键吃掉了，
+    /// 轮不到 App 内的 local monitor —— 用户想录 ⌘⇧V，结果面板被唤出来了。
+    static func suspendHotKey() {
+        current?.hotKey?.unregister()
+        current?.hotKey = nil
+    }
+
+    /// 录制结束（成功或取消）后恢复。传 nil 表示恢复成已保存的那个。
+    @discardableResult
+    static func resumeHotKey(_ combo: HotKeyCombo? = nil) -> Bool {
+        current?.applyHotKey(combo ?? HotKeyCombo.load()) ?? false
     }
 
     // MARK: 捕获

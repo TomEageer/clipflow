@@ -37,6 +37,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        // 兜底：如果用户在录制中途直接关窗口，热键处于已注销状态，必须恢复，
+        // 否则会永久失去唤出面板的能力（还找不到原因）。
+        _ = AppDelegate.resumeHotKey()
         // 关掉后退回菜单栏模式，别在 Dock 里留个图标
         NSApp.setActivationPolicy(.accessory)
     }
