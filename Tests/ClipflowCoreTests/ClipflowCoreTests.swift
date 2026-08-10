@@ -997,3 +997,58 @@ struct KindFilterTests {
         #expect(c[.fileRef] == 1)
     }
 }
+
+// MARK: - 浏览筛选
+
+@Suite("浏览筛选")
+struct BrowseFilterTests {
+
+    private func tempStore() throws -> (ClipflowStore, URL) {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "clipflow-test-\(UUID().uuidString)")
+        return (try ClipflowStore(paths: StoragePaths(root: dir)), dir)
+    }
+    private func snap(_ t: String, app: String) -> RawSnapshot {
+        RawSnapshot(representations: [("public.utf8-plain-text", Data(t.utf8), 0)],
+                    sourceBundleID: app, sourceAppName: app)
+    }
+
+    @Test("按来源筛选")
+    func filterBySource() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        try ingest.ingest(snap("来自 Chrome 的一", app: "Chrome"))
+        try ingest.ingest(snap("来自 Chrome 的二", app: "Chrome"))
+        try ingest.ingest(snap("来自终端的", app: "Terminal"))
+
+        #expect(try store.browse(source: "Chrome").count == 2)
+        #expect(try store.browse(source: "Terminal").count == 1)
+        #expect(try store.browse().count == 3)
+    }
+
+    @Test("来源与类型可叠加")
+    func combinedFilters() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        try ingest.ingest(snap("Chrome 文本", app: "Chrome"))
+        try ingest.ingest(RawSnapshot(
+            representations: [("public.file-url", Data("file:///x".utf8), 0)],
+            sourceBundleID: "Chrome", sourceAppName: "Chrome"))
+
+        #expect(try store.browse(kind: .text, source: "Chrome").count == 1)
+        #expect(try store.browse(kind: .fileRef, source: "Chrome").count == 1)
+        #expect(try store.browse(kind: .image, source: "Chrome").isEmpty)
+    }
+
+    @Test("来源为空的条目不会被误匹配")
+    func emptySourceNotMatched() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try IngestService(store: store).ingest(
+            RawSnapshot(representations: [("public.utf8-plain-text", Data("没有来源".utf8), 0)]))
+        #expect(try store.browse(source: "Chrome").isEmpty)
+        #expect(try store.browse().count == 1)
+    }
+}

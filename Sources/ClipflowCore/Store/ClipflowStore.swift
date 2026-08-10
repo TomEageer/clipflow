@@ -330,16 +330,22 @@ public final class ClipflowStore: Sendable {
     }
 
     public func browse(sort: SortOrder = .recentlyUsed, kind: ClipKind? = nil,
+                       source: String? = nil,
                        query: String = "", limit: Int = 500) throws -> [ClipItem] {
         let q = query.trimmingCharacters(in: .whitespaces)
         if !q.isEmpty {
-            let hits = try search(q, limit: limit)
-            let filtered = kind.map { k in hits.filter { $0.kind == k } } ?? hits
-            return filtered
+            var hits = try search(q, limit: limit)
+            if let kind { hits = hits.filter { $0.kind == kind } }
+            if let source { hits = hits.filter { $0.sourceLabel == source } }
+            return hits
         }
         var conditions: [String] = []
         var args: [any DatabaseValueConvertible] = []
         if let kind { conditions.append("kind = ?"); args.append(kind.rawValue) }
+        if let source {
+            conditions.append("IFNULL(sourceAppName, IFNULL(sourceBundleID, '')) = ?")
+            args.append(source)
+        }
         let whereSQL = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
         return try contentPool.read { db in
             try ClipItem.fetchAll(db, sql:

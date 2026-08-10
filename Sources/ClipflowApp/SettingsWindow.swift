@@ -57,6 +57,14 @@ final class SettingsModel: ObservableObject {
     @Published private(set) var breakdown: [(kind: ClipKind, count: Int, bytes: Int)] = []
     @Published private(set) var stats: ClipflowStore.Stats?
     @Published var kindFilter: ClipKind? { didSet { refreshList() } }
+    @Published var sourceFilter: String? { didSet { refreshList() } }
+
+    var hasFilter: Bool { kindFilter != nil || sourceFilter != nil }
+
+    func clearFilters() {
+        kindFilter = nil
+        sourceFilter = nil
+    }
     @Published var query: String = "" { didSet { refreshList() } }
     @Published var selected: Set<ClipItem.ID> = []
     @Published var lastAction: String = ""
@@ -84,7 +92,8 @@ final class SettingsModel: ObservableObject {
     }
 
     func refreshList() {
-        items = (try? store.browse(sort: .recentlyUsed, kind: kindFilter, query: query)) ?? []
+        items = (try? store.browse(sort: .recentlyUsed, kind: kindFilter,
+                                   source: sourceFilter, query: query)) ?? []
         selected = selected.filter { id in items.contains { $0.id == id } }
     }
 
@@ -318,14 +327,25 @@ private struct HistoryTab: View {
                     .padding(.vertical, 2)
                 }.width(min: 240, ideal: 330)
 
+                // 点单元格即按该值筛选 —— 比另开一个下拉框直观，也少一个控件
                 TableColumn("类型", value: \.kind) { item in
-                    Text(item.kind.label).foregroundStyle(.secondary)
-                }.width(56)
+                    FilterCell(text: item.kind.label,
+                               active: model.kindFilter == item.kind) {
+                        model.kindFilter = (model.kindFilter == item.kind) ? nil : item.kind
+                    }
+                }.width(62)
 
                 TableColumn("来源", value: \.sourceLabel) { item in
-                    Text(item.sourceLabel.isEmpty ? "—" : item.sourceLabel)
-                        .lineLimit(1).foregroundStyle(.secondary)
-                }.width(min: 90, ideal: 120)
+                    if item.sourceLabel.isEmpty {
+                        Text("—").foregroundStyle(.tertiary)
+                    } else {
+                        FilterCell(text: item.sourceLabel,
+                                   active: model.sourceFilter == item.sourceLabel) {
+                            model.sourceFilter =
+                                (model.sourceFilter == item.sourceLabel) ? nil : item.sourceLabel
+                        }
+                    }
+                }.width(min: 96, ideal: 130)
 
                 TableColumn("大小", value: \.byteSize) { item in
                     Text(ByteCountFormatter().string(fromByteCount: Int64(item.byteSize)))
@@ -368,14 +388,18 @@ private struct HistoryTab: View {
             .background(RoundedRectangle(cornerRadius: 6).fill(.quaternary.opacity(0.5)))
             .frame(width: 230)
 
-            Picker("", selection: $model.kindFilter) {
-                Text("全部类型").tag(ClipKind?.none)
-                Divider()
-                ForEach(ClipKind.allCases, id: \.self) { k in
-                    Text(k.label).tag(ClipKind?.some(k))
-                }
+            // 当前生效的筛选做成可一键移除的标签。
+            // 不做下拉框：筛选是从表格里点出来的，用户的注意力就在表格上。
+            if let k = model.kindFilter {
+                FilterChip(icon: "tag", text: k.label) { model.kindFilter = nil }
             }
-            .labelsHidden().frame(width: 108)
+            if let src = model.sourceFilter {
+                FilterChip(icon: "app.badge", text: src) { model.sourceFilter = nil }
+            }
+            if model.hasFilter {
+                Button("清除筛选") { model.clearFilters() }
+                    .buttonStyle(.link).font(.system(size: 11))
+            }
 
             Spacer()
 
@@ -416,7 +440,7 @@ private struct HistoryTab: View {
                 Text("\(model.items.count) 条")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                 Spacer()
-                Text("⌘ 点击多选 · ⇧ 点击连选 · 点列头排序")
+                Text(Self.hint)
                     .font(.system(size: 10)).foregroundStyle(.tertiary)
             }
         }
@@ -460,6 +484,8 @@ private struct HistoryTab: View {
         default: return "text.alignleft"
         }
     }
+
+    static let hint = "点类型或来源即可筛选 · 点列头排序 · ⌘ 点击多选"
 
     /// 今天只显示时分，其余显示月日 —— 完整日期时间会被列宽截断，反而看不清
     static func stamp(_ d: Date) -> String {
@@ -531,5 +557,55 @@ private struct StorageTab: View {
         }
         .formStyle(.grouped)
         .onAppear { model.refresh() }
+    }
+}
+
+// MARK: - 可点击筛选的单元格与筛选标签
+
+/// 表格里可点击的值。点一下按该值筛选，再点一下取消。
+/// 平时看着就是普通文字，鼠标移上去才显出可点击 —— 不打扰阅读。
+private struct FilterCell: View {
+    let text: String
+    let active: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(text)
+                .lineLimit(1)
+                .foregroundStyle(active ? Color.accentColor : .secondary)
+                .padding(.horizontal, 4).padding(.vertical, 1)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(active ? Color.accentColor.opacity(0.15)
+                                     : (hovering ? Color.primary.opacity(0.08) : .clear))
+                )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(active ? "点击取消筛选" : "点击只看「\(text)」")
+    }
+}
+
+/// 工具栏上的筛选标签，带 × 一键移除
+private struct FilterChip: View {
+    let icon: String
+    let text: String
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon).font(.system(size: 9))
+            Text(text).lineLimit(1)
+            Button(action: onRemove) {
+                Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
+            }
+            .buttonStyle(.plain)
+        }
+        .font(.system(size: 11))
+        .padding(.horizontal, 7).padding(.vertical, 3)
+        .background(Capsule().fill(Color.accentColor.opacity(0.15)))
+        .foregroundStyle(Color.accentColor)
     }
 }
