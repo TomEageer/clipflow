@@ -1,0 +1,26 @@
+.build/
+.swiftpm/
+*.xcodeproj
+*.xcworkspace
+DerivedData/
+.DS_Store
+
+# 基准脚本编译产物
+bench/*bin
+bench/drivebin
+bench/aspectbin
+bench/lt2bin
+bench/ltbin
+bench/gridbin
+
+# 绝不提交任何真实剪贴板数据
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+blobs/
+thumbs/
+
+# 暂不入库，等作者决定是否公开：
+# 该文档是对本机安装的商业软件 Paste 的逆向分析，含本机绝对路径、
+# 第三方重签名副本的取证细节等。公开与否是作者的决定，不默认进 git 历史。
+docs/02-Paste底层实现分析.md
