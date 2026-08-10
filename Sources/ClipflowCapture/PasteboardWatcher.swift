@@ -22,6 +22,9 @@ public final class PasteboardWatcher: ClipSource, @unchecked Sendable {
         public var idleThreshold: TimeInterval = 60
         /// 单条上限，超过只记元数据不取数据
         public var maxBytesPerItem = 100 * 1024 * 1024
+        /// 启动时把剪贴板上已有的内容也捕获一次。
+        /// 不做的话，App 启动前复制的东西会永久丢失 —— 用户不会理解为什么"刚复制的没记上"。
+        public var captureOnStart = true
 
         public init() {}
     }
@@ -50,7 +53,11 @@ public final class PasteboardWatcher: ClipSource, @unchecked Sendable {
     }
 
     public func start() -> AsyncStream<RawSnapshot> {
-        lock.lock(); running = true; lock.unlock()
+        lock.lock()
+        running = true
+        // 启动时先"认领"当前剪贴板：把基线退一格，让首轮轮询把现有内容当成一次变更捕获。
+        if config.captureOnStart { lastChangeCount = pasteboard.changeCount - 1 }
+        lock.unlock()
 
         // ⚠️ 读取**必须与检测同步**，不能甩到别的队列延后执行。
         //
@@ -153,50 +160,55 @@ public final class PasteboardWatcher: ClipSource, @unchecked Sendable {
 
     // MARK: - NSPasteboard → RawSnapshot
 
-    /// 已知的「承诺型/可派生」类型 —— **必须跳过，读它们会阻塞十几秒**。
-    ///
-    /// 实测（跨进程读一次普通富文本复制）：
-    /// ```
-    /// public.utf8-plain-text                0.3ms   1720B
-    /// public.html                           0.1ms   1740B
-    /// public.rtf                            0.1ms   1728B
-    /// public.utf16-external-plain-text  18493.3ms   nil   ← 阻塞 18.5 秒后返回 nil
-    /// ```
-    /// 写入方声明了这个类型却从不提供数据，读取方一路等到系统超时。
-    /// 而它的内容完全可以从 utf8 派生，跳过零损失。
-    public static let skippedTypes: Set<String> = [
-        "public.utf16-external-plain-text",
-        "public.utf16-plain-text",
-        "NSStringPboardType",              // utf8 的老别名
-        "CorePasteboardFlavorType 0x75747874",
-    ]
-
-    /// 单个类型的读取超时。超过就放弃这个类型，保住整体捕获不被拖死。
-    public static let perTypeTimeout: TimeInterval = 0.3
-
     /// 读取当前剪贴板的全部 representation。
     ///
     /// ⚠️ 必须在 changeCount 变更后**立即**读：部分 App 用 lazy pasteboard provider，
     /// 内容是被读取时才生成的，读取时机错了就拿到空。
     ///
-    /// ⚠️ 同时必须防阻塞：跳过已知承诺型类型 + 对每个类型加超时看门狗。
-    /// 只靠跳过列表不够 —— 列不全所有会阻塞的类型，看门狗兜住未知的。
+    /// ⚠️ 必须分级读取，绝不能"把广告的类型全读一遍"——
+    /// 那样一次带格式的复制就会冻住二十多秒。根因与实测数据见 `TypePolicy`。
+    ///
+    /// 读取顺序也有意义：**可信类型先读**，保证即使后面撞上未知坏类型耗光预算，
+    /// 核心保真数据也已经拿到手了。
     public static func snapshot(from pb: NSPasteboard, maxBytes: Int) -> RawSnapshot? {
         guard let items = pb.pasteboardItems, !items.isEmpty else { return nil }
 
         var reps: [(uti: String, data: Data)] = []
         var total = 0
+        let started = CFAbsoluteTimeGetCurrent()
+        let cache = NegativeTypeCache.shared
 
         for item in items {
-            for type in item.types {
-                if skippedTypes.contains(type.rawValue) { continue }
+            // 分两轮：可信类型优先，未知类型垫后
+            let all = item.types
+            let trusted = all.filter { TypePolicy.classify($0.rawValue) == .trusted }
+            let unknown = all.filter { TypePolicy.classify($0.rawValue) == .unknown }
+            // .skip 级别的直接不进循环
 
-                switch readWithTimeout(item, type) {
-                case .timedOut:
-                    // 记下类型名但不带数据，保留「这个格式存在过」的事实
+            // ── 第一轮：可信类型，直接读、不设看门狗
+            // 不设超时是刻意的：大图的合法读取可能超过任何短阈值，设了反而误伤真数据。
+            for type in trusted {
+                guard let data = item.data(forType: type) else {
+                    // 空 data 的类型要保留 —— concealed 标记就是「只有类型没有内容」的标志位
                     reps.append((type.rawValue, Data()))
+                    continue
+                }
+                total += data.count
+                if total > maxBytes { break }
+                reps.append((type.rawValue, data))
+            }
+
+            // ── 第二轮：未知类型，看门狗保护 + 负缓存自学习
+            // 保留这一轮是为了冷门 App 私有格式的保真，不能因噎废食全砍掉。
+            for type in unknown {
+                if cache.isBad(type.rawValue) { continue }
+                if CFAbsoluteTimeGetCurrent() - started > TypePolicy.totalReadBudget { break }
+
+                switch readWithTimeout(item, type, timeout: TypePolicy.unknownTypeTimeout) {
+                case .timedOut:
+                    // 学会了：本会话之后再也不试这个类型
+                    cache.markBad(type.rawValue)
                 case .value(nil):
-                    // 空 data 的类型要保留 —— concealed 标记就是这种「只有类型没有内容」的标志位
                     reps.append((type.rawValue, Data()))
                 case .value(let data?):
                     total += data.count
@@ -224,9 +236,12 @@ public final class PasteboardWatcher: ClipSource, @unchecked Sendable {
 
     /// 带超时的单类型读取。
     ///
-    /// `data(forType:)` 不可取消，超时后那个线程仍会挂着直到系统超时 —— 这是可接受的代价：
-    /// 泄漏一个短命线程，好过让整个捕获循环冻结十几秒。
-    static func readWithTimeout(_ item: NSPasteboardItem, _ type: NSPasteboard.PasteboardType) -> ReadOutcome {
+    /// `data(forType:)` 不可取消，超时后那个线程仍会挂到系统超时（实测最长 23.8s）
+    /// —— 这是可接受的代价：泄漏一个短命线程，好过冻结整个捕获循环。
+    /// 配合负缓存，同一个坏类型每会话最多泄漏一次。
+    static func readWithTimeout(_ item: NSPasteboardItem,
+                                _ type: NSPasteboard.PasteboardType,
+                                timeout: TimeInterval) -> ReadOutcome {
         let sem = DispatchSemaphore(value: 0)
         // 用 NSLock 保护，避免超时后后台线程写入与主线程读取竞争
         let box = ResultBox()
@@ -235,7 +250,7 @@ public final class PasteboardWatcher: ClipSource, @unchecked Sendable {
             box.set(d)
             sem.signal()
         }
-        if sem.wait(timeout: .now() + perTypeTimeout) == .timedOut {
+        if sem.wait(timeout: .now() + timeout) == .timedOut {
             return .timedOut
         }
         return .value(box.get())

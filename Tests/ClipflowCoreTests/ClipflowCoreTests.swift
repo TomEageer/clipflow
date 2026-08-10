@@ -381,19 +381,76 @@ struct CaptureContractTests {
         }
     }
 
-    /// 阻塞类型的跳过列表必须存在且包含实测确认的元凶。
-    ///
-    /// 实测：跨进程读 public.utf16-external-plain-text 阻塞 18493ms 后返回 nil。
-    /// 少了这条，一次普通富文本复制就会冻住捕获十几秒。
-    @Test("承诺型阻塞类型必须在跳过列表里")
-    func skipListCoversKnownBlocker() throws {
-        let src = URL(fileURLWithPath: #filePath)
+    /// 读取策略必须独立成文件 —— 它是 M1 重构的核心产物，
+    /// 承载"为什么不能把广告类型全读一遍"这条最贵的教训。
+    /// 详细断言见「剪贴板类型读取策略」套件。
+    @Test("类型读取策略独立成 TypePolicy.swift")
+    func typePolicyIsSeparateFile() throws {
+        let p = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "Sources/ClipflowCapture/TypePolicy.swift")
+        #expect(FileManager.default.fileExists(atPath: p.path),
+                "TypePolicy.swift 不存在 —— 读取策略不该散落在 Watcher 里")
+
+        // Watcher 必须真的用上策略，不能绕过
+        let w = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appending(path: "Sources/ClipflowCapture/PasteboardWatcher.swift")
-        let text = try String(contentsOf: src, encoding: .utf8)
-        #expect(text.contains("public.utf16-external-plain-text"),
-                "跳过列表缺少实测确认会阻塞 18.5 秒的类型")
-        #expect(text.contains("perTypeTimeout"),
-                "缺少单类型读取超时看门狗 —— 跳过列表列不全所有阻塞类型")
+        let ws = try String(contentsOf: w, encoding: .utf8)
+        #expect(ws.contains("TypePolicy.classify"), "Watcher 没走分级策略")
+        #expect(ws.contains("NegativeTypeCache"), "Watcher 没接负缓存")
+    }
+}
+
+// MARK: - 类型读取策略（M1 重构后的核心防线）
+
+@Suite("剪贴板类型读取策略")
+struct TypePolicyTests {
+
+    private func policySource() throws -> String {
+        let p = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "Sources/ClipflowCapture/TypePolicy.swift")
+        return try String(contentsOf: p, encoding: .utf8)
+    }
+
+    /// 根因：只要剪贴板上有 RTF，macOS 就广告一个谁都兑现不了的
+    /// public.utf16-external-plain-text，首读阻塞 18.5~23.8 秒后返回 badPasteboardFlavorErr。
+    /// 三种写入方式全复现，含 NSAttributedString（TextEdit/浏览器/飞书的标准写法）。
+    @Test("已知不可兑现类型必须在种子列表里")
+    func knownBadSeeded() throws {
+        let s = try policySource()
+        #expect(s.contains("public.utf16-external-plain-text"))
+        #expect(s.contains("knownUnfulfillable"))
+    }
+
+    /// 可信类型不设看门狗是刻意的：大图合法读取可能超过任何短阈值，
+    /// 设了超时反而把真数据误判成坏类型丢掉。
+    @Test("可信类型列表覆盖核心保真格式")
+    func trustedCoversCore() throws {
+        let s = try policySource()
+        for uti in ["public.utf8-plain-text", "public.rtf", "public.html",
+                    "public.png", "public.tiff", "public.file-url"] {
+            #expect(s.contains(uti), "可信列表缺 \(uti)")
+        }
+    }
+
+    /// 硬编码列表列不全各家 App 的私有 UTI，负缓存才是正确性依赖。
+    @Test("必须有负缓存自学习，不能只靠硬编码列表")
+    func negativeCacheExists() throws {
+        let s = try policySource()
+        #expect(s.contains("NegativeTypeCache"))
+        #expect(s.contains("markBad"))
+        #expect(s.contains("totalReadBudget"), "缺少单次快照总读取预算")
+    }
+
+    /// 启动前复制的内容不该永久丢失
+    @Test("启动时捕获现有剪贴板内容")
+    func captureOnStart() throws {
+        let p = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "Sources/ClipflowCapture/PasteboardWatcher.swift")
+        let s = try String(contentsOf: p, encoding: .utf8)
+        #expect(s.contains("captureOnStart"))
     }
 }
