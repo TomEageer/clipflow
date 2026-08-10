@@ -146,6 +146,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         prefs.target = self
         menu.addItem(prefs)
 
+        let about = NSMenuItem(title: "关于 Clipflow", action: #selector(openAbout), keyEquivalent: "")
+        about.target = self
+        menu.addItem(about)
+
+        menu.addItem(.separator())
         let quit = NSMenuItem(title: "退出 Clipflow", action: #selector(NSApplication.terminate(_:)),
                               keyEquivalent: "q")
         menu.addItem(quit)
@@ -354,6 +359,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func openSettings() {
         if settingsWC == nil { settingsWC = SettingsWindowController(store: store) }
         settingsWC?.show()
+    }
+
+    @objc private func openAbout() {
+        if settingsWC == nil { settingsWC = SettingsWindowController(store: store) }
+        settingsWC?.show(tab: 3)
     }
 
     /// 定期按设置清理。启动 30s 后跑一次，之后每小时一次。

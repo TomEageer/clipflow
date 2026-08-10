@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "Clipflow",
+    defaultLocalization: "en",
     platforms: [.macOS(.v14)],
     products: [
         // 核心引擎：零 UI 依赖，可被 App / CLI / 测试 / 未来任何 Shell 复用
@@ -38,6 +39,7 @@ let package = Package(
         .executableTarget(
             name: "ClipflowApp",
             dependencies: ["ClipflowCore", "ClipflowCapture"],
+            resources: [.process("Resources")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(

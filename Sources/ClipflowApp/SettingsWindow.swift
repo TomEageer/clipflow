@@ -27,7 +27,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func show() {
+    func show(tab: Int? = nil) {
+        if let tab { model.selectedTab = tab }
         model.refresh()
         // 设置窗口是"正经窗口"，需要正常激活，与浮窗面板不同
         NSApp.setActivationPolicy(.regular)
@@ -68,6 +69,7 @@ final class SettingsModel: ObservableObject {
     @Published var query: String = "" { didSet { refreshList() } }
     @Published var selected: Set<ClipItem.ID> = []
     @Published var lastAction: String = ""
+    @Published var selectedTab: Int = 0
     /// 显示**实际生效**的组合，不是"保存过的那个"。注册失败时两者会不一致，
     /// 显示保存值等于界面在骗人。
     @Published var hotKey: HotKeyCombo = AppDelegate.currentActiveCombo() ?? HotKeyCombo.load()
@@ -162,10 +164,11 @@ struct SettingsView: View {
     @ObservedObject var model: SettingsModel
 
     var body: some View {
-        TabView {
-            GeneralTab(model: model).tabItem { Label("通用", systemImage: "gearshape") }
-            HistoryTab(model: model).tabItem { Label("历史记录", systemImage: "clock.arrow.circlepath") }
-            StorageTab(model: model).tabItem { Label("存储", systemImage: "internaldrive") }
+        TabView(selection: $model.selectedTab) {
+            GeneralTab(model: model).tabItem { Label("通用", systemImage: "gearshape") }.tag(0)
+            HistoryTab(model: model).tabItem { Label("历史记录", systemImage: "clock.arrow.circlepath") }.tag(1)
+            StorageTab(model: model).tabItem { Label("存储", systemImage: "internaldrive") }.tag(2)
+            AboutTab().tabItem { Label("关于", systemImage: "info.circle") }.tag(3)
         }
         .frame(minWidth: 780, minHeight: 520)
         .overlay(alignment: .bottom) {

@@ -19,6 +19,16 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Clipflow"
 
+# 图标
+cp assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+
+# 本地化资源包。SPM 把 .lproj 打进 <Package>_<Target>.bundle，
+# 必须一并拷进 Resources，否则 App 里所有文案会退回 key 名。
+for b in ".build/${CONFIG}"/*.bundle; do
+  [ -e "$b" ] || continue
+  cp -R "$b" "$APP/Contents/Resources/"
+done
+
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -34,6 +44,11 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>LSMinimumSystemVersion</key>    <string>14.0</string>
     <key>LSUIElement</key>               <true/>
     <key>NSHighResolutionCapable</key>   <true/>
+    <key>CFBundleIconFile</key>          <string>AppIcon</string>
+    <key>CFBundleDevelopmentRegion</key> <string>en</string>
+    <key>CFBundleLocalizations</key>
+    <array><string>en</string><string>zh-Hans</string></array>
+    <key>NSHumanReadableCopyright</key>  <string>MIT License · Copyright (c) 2026 TomEageer</string>
 </dict>
 </plist>
 PLIST

@@ -1,0 +1,41 @@
+/* Menu bar */
+"menu.recorded"          = "Clipflow · %d items";
+"menu.open_panel"        = "Open Clipboard Panel (%@)";
+"menu.open_panel_nokey"  = "Open Clipboard Panel (shortcut inactive)";
+"menu.perm.ready"        = "Auto-paste ready";
+"menu.perm.missing"      = "Not authorized — click to grant Accessibility";
+"menu.perm.hint"         = "    (Works without it: content is copied, press ⌘V yourself)";
+"menu.perm.reopen"       = "    Still shows unauthorized? Reopen System Settings";
+"menu.paste_log"         = "Show Paste Log…";
+"menu.settings"          = "Settings…";
+"menu.about"             = "About Clipflow";
+"menu.quit"              = "Quit Clipflow";
+
+/* Panel */
+"panel.search"           = "Search clipboard…";
+"panel.empty"            = "Nothing recorded yet";
+"panel.empty_category"   = "Nothing in this category yet";
+"panel.no_match"         = "No matches";
+"panel.select_to_view"   = "Select an item to preview";
+"panel.count"            = "%d items";
+"panel.key.select"       = "Select";
+"panel.key.paste"        = "Paste";
+"panel.key.pin"          = "Pin";
+"panel.key.unpin"        = "Unpin";
+"panel.key.delete"       = "Delete";
+"panel.sensitive"        = "Sensitive";
+"panel.unknown_source"   = "Unknown source";
+
+/* Categories */
+"category.all"           = "All";
+"category.text"          = "Text";
+"category.image"         = "Images";
+"category.file"          = "Files";
+"category.other"         = "Other";
+
+/* Settings */
+"settings.title"         = "Clipflow Settings";
+"settings.tab.general"   = "General";
+"settings.tab.history"   = "History";
+"settings.tab.storage"   = "Storage";
+"settings.tab.about"     = "About";
