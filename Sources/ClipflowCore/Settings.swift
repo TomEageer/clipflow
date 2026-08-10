@@ -53,6 +53,8 @@ public struct ClipflowSettings: Codable, Sendable, Equatable {
     public var excludedBundleIDs: [String] = []
     /// 启动时捕获剪贴板已有内容
     public var captureOnStart: Bool = true
+    /// 启动时自动检查更新。默认开，但这是本应用唯一的网络请求，可随时关掉。
+    public var autoCheckUpdates: Bool = true
 
     public init() {}
 

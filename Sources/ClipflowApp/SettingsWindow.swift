@@ -74,6 +74,19 @@ final class SettingsModel: ObservableObject {
     /// 显示保存值等于界面在骗人。
     @Published var hotKey: HotKeyCombo = AppDelegate.currentActiveCombo() ?? HotKeyCombo.load()
     @Published var hotKeyOK: Bool = true
+    @Published var updateState = UpdateState()
+
+    func checkForUpdates() {
+        updateState = .checking()
+        Task { @MainActor in
+            do {
+                let r = try await Updater.check()
+                updateState = r.hasUpdate ? .available(r.latest) : .upToDate(r.current)
+            } catch {
+                updateState = .failed(error)
+            }
+        }
+    }
 
     func syncHotKey() {
         hotKey = AppDelegate.currentActiveCombo() ?? HotKeyCombo.load()
@@ -193,57 +206,44 @@ private struct GeneralTab: View {
     var body: some View {
         Form {
             Section("保留策略") {
-                Picker("历史保留期", selection: $model.settings.retention) {
-                    ForEach(ClipflowSettings.Retention.allCases, id: \.self) { Text($0.label).tag($0) }
+                LabeledContent("历史保留期") {
+                    Picker("", selection: $model.settings.retention) {
+                        ForEach(ClipflowSettings.Retention.allCases, id: \.self) {
+                            Text($0.label).tag($0)
+                        }
+                    }.labelsHidden().frame(width: 130)
                 }
-                Text("超过保留期且未置顶的条目会在清理时删除。置顶条目永不自动删除。")
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
-
-                Picker("敏感内容（密码 / token）", selection: $model.settings.sensitiveTTL) {
-                    ForEach(ClipflowSettings.SensitiveTTL.allCases, id: \.self) { Text($0.label).tag($0) }
+                LabeledContent("敏感内容") {
+                    Picker("", selection: $model.settings.sensitiveTTL) {
+                        ForEach(ClipflowSettings.SensitiveTTL.allCases, id: \.self) {
+                            Text($0.label).tag($0)
+                        }
+                    }.labelsHidden().frame(width: 130)
                 }
-                Text("被识别为 token、密钥、密码的内容不会进入搜索索引；这里控制它们保留多久。")
+                Text("超过保留期且未置顶的条目会在清理时删除，置顶条目永不自动删除。"
+                     + "被识别为 token / 密钥 / 密码的内容不会进入搜索索引。")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
 
             Section("容量上限") {
-                // 数值放标题行 —— 之前放在滑块右侧，把滑块挤窄了，
-                // 导致刻度行与滑块轨道宽度不同、刻度对不上实际位置。
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 8) {
-                        Text("存储上限")
-                        Spacer()
-                        if let st = model.stats {
-                            Text("已用 \(ByteCountFormatter().string(fromByteCount: Int64(st.totalBytes)))")
-                                .font(.system(size: 10)).foregroundStyle(.secondary)
-                        }
-                        Text(SizeSteps.storageLabel(model.settings.maxStorageMB))
-                            .font(.system(size: 12, design: .rounded)).bold().monospacedDigit()
-                    }
+                LabeledContent {
                     SteppedSlider(steps: SizeSteps.storageMB,
                                   label: SizeSteps.storageLabel,
                                   value: $model.settings.maxStorageMB)
+                } label: {
+                    Text("存储上限")
+                    if let st = model.stats {
+                        Text("已用 \(ByteCountFormatter().string(fromByteCount: Int64(st.totalBytes)))")
+                    }
                 }
 
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text("条目数上限")
-                        Spacer()
-                        Text(SizeSteps.countLabel(model.settings.maxItems))
-                            .font(.system(size: 12, design: .rounded)).bold().monospacedDigit()
-                    }
+                LabeledContent("条目数上限") {
                     SteppedSlider(steps: SizeSteps.itemCounts,
                                   label: SizeSteps.countLabel,
                                   value: $model.settings.maxItems)
                 }
 
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text("单条最大")
-                        Spacer()
-                        Text(SizeSteps.itemSizeLabel(model.settings.maxItemSizeMB))
-                            .font(.system(size: 12, design: .rounded)).bold().monospacedDigit()
-                    }
+                LabeledContent("单条最大") {
                     SteppedSlider(steps: SizeSteps.itemSizeMB,
                                   label: SizeSteps.itemSizeLabel,
                                   value: $model.settings.maxItemSizeMB)
@@ -254,37 +254,52 @@ private struct GeneralTab: View {
             }
 
             Section("快捷键") {
-                HStack {
-                    Text("唤出剪贴板面板")
-                    Spacer()
-                    HotKeyRecorderView(combo: $model.hotKey) { c in
-                        model.hotKeyOK = AppDelegate.applyHotKeyGlobally(c)
-                        model.syncHotKey()
-                    }
-                    .frame(width: 180, height: 24)
-                    Button("恢复默认") {
-                        _ = AppDelegate.resetHotKeyToDefault()
-                        model.syncHotKey()
-                        model.hotKeyOK = true
+                LabeledContent("唤出剪贴板面板") {
+                    HStack(spacing: 6) {
+                        HotKeyRecorderView(combo: $model.hotKey) { c in
+                            model.hotKeyOK = AppDelegate.applyHotKeyGlobally(c)
+                            model.syncHotKey()
+                        }
+                        .frame(width: 132, height: 22)
+                        Button("恢复默认") {
+                            _ = AppDelegate.resetHotKeyToDefault()
+                            model.syncHotKey()
+                            model.hotKeyOK = true
+                        }
+                        .controlSize(.small)
                     }
                 }
                 if !model.hotKeyOK {
-                    Label("这个组合已被别的 App 占用，仍在使用 \(model.hotKey.display)。换一个试试。",
+                    Label("这个组合已被别的 App 占用，仍在使用 \(model.hotKey.display)",
                           systemImage: "exclamationmark.triangle.fill")
                         .font(.system(size: 10)).foregroundStyle(.orange)
                 }
-                Text("点一下按钮再按组合键。必须带至少一个修饰键（⌘ / ⌥ / ⌃ / ⇧），否则会劫走正常打字。"
-                     + "录制期间全局快捷键会临时停用，取消或关窗都会自动恢复。")
+                Text("点一下按钮再按组合键，必须带至少一个修饰键。录制期间全局快捷键临时停用，取消或关窗会自动恢复。")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
 
             Section("行为") {
                 Toggle("启动时捕获剪贴板已有内容", isOn: $model.settings.captureOnStart)
-                Text("关掉的话，App 启动前复制的东西不会被记录。")
+                Toggle("启动时自动检查更新", isOn: $model.settings.autoCheckUpdates)
+                LabeledContent("软件更新") {
+                    HStack(spacing: 8) {
+                        if model.updateState.isChecking { ProgressView().controlSize(.small) }
+                        Text(model.updateState.message)
+                            .font(.system(size: 11))
+                            .foregroundStyle(model.updateState.hasUpdate ? Color.accentColor : .secondary)
+                        Button(model.updateState.hasUpdate ? "前往下载" : "检查更新") {
+                            if model.updateState.hasUpdate { Updater.openReleasePage() }
+                            else { model.checkForUpdates() }
+                        }
+                        .controlSize(.small)
+                    }
+                }
+                Text("检查更新会向 GitHub 请求一次最新版本号，这是本应用唯一的网络请求，且只在你触发或勾选自动检查时发生。")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
+        .onAppear { model.refresh() }
     }
 }
 

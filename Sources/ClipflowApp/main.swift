@@ -57,6 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setupHotKey()
         startCapture()
         startCleanupSchedule()
+        autoCheckUpdatesIfEnabled()
 
         // 演示模式：启动即在屏幕中央打开面板，供文档截图
         if ProcessInfo.processInfo.environment["CLIPFLOW_DEMO"] == "1" {
@@ -164,6 +165,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let prefs = NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ",")
         prefs.target = self
         menu.addItem(prefs)
+
+        let donate = NSMenuItem(title: "赞赏支持…", action: #selector(openDonate), keyEquivalent: "")
+        donate.target = self
+        donate.image = NSImage(systemSymbolName: "heart", accessibilityDescription: nil)
+        menu.addItem(donate)
+
+        let update = NSMenuItem(title: updateMenuTitle, action: #selector(checkUpdates), keyEquivalent: "")
+        update.target = self
+        if pendingUpdateVersion != nil {
+            update.image = NSImage(systemSymbolName: "arrow.down.circle.fill", accessibilityDescription: nil)
+        }
+        menu.addItem(update)
 
         let about = NSMenuItem(title: "关于 Clipflow", action: #selector(openAbout), keyEquivalent: "")
         about.target = self
@@ -378,6 +391,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func openSettings() {
         if settingsWC == nil { settingsWC = SettingsWindowController(store: store) }
         settingsWC?.show()
+    }
+
+    /// 后台检查到的新版本号；有值时菜单会直接提示
+    private var pendingUpdateVersion: String?
+
+    private var updateMenuTitle: String {
+        if let v = pendingUpdateVersion { return "有新版本 \(v) — 点此下载" }
+        return "检查更新…"
+    }
+
+    @objc private func openDonate() { Updater.openDonate() }
+
+    @objc private func checkUpdates() {
+        if pendingUpdateVersion != nil { Updater.openReleasePage(); return }
+        Task { @MainActor in
+            do {
+                let r = try await Updater.check()
+                if r.hasUpdate {
+                    pendingUpdateVersion = r.latest
+                    rebuildMenu()
+                    let a = NSAlert()
+                    a.messageText = "有新版本 \(r.latest)"
+                    a.informativeText = "当前版本 \(r.current)。前往下载？"
+                    a.addButton(withTitle: "前往下载")
+                    a.addButton(withTitle: "稍后")
+                    if a.runModal() == .alertFirstButtonReturn { Updater.openReleasePage() }
+                } else {
+                    let a = NSAlert()
+                    a.messageText = "已是最新版本"
+                    a.informativeText = "当前版本 \(r.current)。"
+                    a.runModal()
+                }
+            } catch {
+                let a = NSAlert()
+                a.messageText = "检查更新失败"
+                a.informativeText = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+                a.runModal()
+            }
+        }
+    }
+
+    /// 启动后静默检查一次（可在设置里关）。失败完全静默 —— 更新检查失败不该打扰用户。
+    private func autoCheckUpdatesIfEnabled() {
+        guard ClipflowSettings.load().autoCheckUpdates else { return }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard let r = try? await Updater.check(), r.hasUpdate else { return }
+            pendingUpdateVersion = r.latest
+            rebuildMenu()
+        }
     }
 
     @objc private func openAbout() {

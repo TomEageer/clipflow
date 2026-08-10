@@ -16,6 +16,9 @@ struct SteppedSlider<T: Equatable & BinaryInteger>: View {
     let steps: [T]
     let label: (T) -> String
     @Binding var value: T
+    /// 滑块宽度。**刻意收窄**：铺满整行的滑块看着松垮，
+    /// 而且档位就那么几个，长轨道对定位毫无帮助。
+    var width: CGFloat = 168
 
     /// 当前值不在档位里时（比如老版本用输入框设过 700MB），落到**最接近**的一档。
     /// 直接 `firstIndex ?? 0` 会静默显示成最小档，用户没动过却看到值变了。
@@ -29,7 +32,7 @@ struct SteppedSlider<T: Equatable & BinaryInteger>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
+        HStack(spacing: 10) {
             TickedSlider(
                 count: steps.count,
                 index: Binding(
@@ -40,16 +43,12 @@ struct SteppedSlider<T: Equatable & BinaryInteger>: View {
                     }
                 )
             )
-            .frame(height: 22)
+            .frame(width: width, height: 20)
 
-            // 只标首尾。中间档位由原生刻度点表示 —— 标文字反而挤，且容易与刻度错位。
-            HStack {
-                Text(label(steps.first ?? value))
-                Spacer()
-                Text(label(steps.last ?? value))
-            }
-            .font(.system(size: 9))
-            .foregroundStyle(.tertiary)
+            Text(label(value))
+                .font(.system(size: 12, design: .rounded)).bold()
+                .monospacedDigit()
+                .frame(width: 62, alignment: .trailing)
         }
     }
 }

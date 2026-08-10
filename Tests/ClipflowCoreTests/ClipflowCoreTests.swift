@@ -1052,3 +1052,44 @@ struct BrowseFilterTests {
         #expect(try store.browse().count == 1)
     }
 }
+
+// MARK: - 版本比较
+
+@Suite("版本比较")
+struct VersionCompareTests {
+
+    /// 与 Updater.isNewer 同一套逻辑。字符串比较会把 "0.10.0" 判成小于 "0.9.0"，
+    /// 必须逐段比数字。
+    private func isNewer(_ a: String, than b: String) -> Bool {
+        let pa = a.split(separator: ".").map { Int($0.prefix(while: \.isNumber)) ?? 0 }
+        let pb = b.split(separator: ".").map { Int($0.prefix(while: \.isNumber)) ?? 0 }
+        for i in 0..<max(pa.count, pb.count) {
+            let x = i < pa.count ? pa[i] : 0
+            let y = i < pb.count ? pb[i] : 0
+            if x != y { return x > y }
+        }
+        return false
+    }
+
+    @Test("语义化版本逐段比较")
+    func semantic() {
+        #expect(isNewer("0.2.0", than: "0.1.0"))
+        #expect(!isNewer("0.1.0", than: "0.1.0"))
+        #expect(!isNewer("0.1.0", than: "0.2.0"))
+        #expect(isNewer("1.0.0", than: "0.99.9"))
+    }
+
+    /// 这条是关键：按字符串比 "0.10.0" < "0.9.0"，会导致用户永远收不到 0.10 的更新
+    @Test("两位数版本号不会被判错")
+    func doubleDigit() {
+        #expect(isNewer("0.10.0", than: "0.9.0"))
+        #expect(isNewer("1.20.0", than: "1.3.0"))
+        #expect(!isNewer("1.3.0", than: "1.20.0"))
+    }
+
+    @Test("段数不同时短的补 0")
+    func differentLengths() {
+        #expect(isNewer("0.1.1", than: "0.1"))
+        #expect(!isNewer("0.1", than: "0.1.0"))
+    }
+}

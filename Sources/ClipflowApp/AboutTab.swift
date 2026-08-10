@@ -7,6 +7,8 @@ import SwiftUI
 /// 用户也不用记「关于」和「设置」是两个地方。
 struct AboutTab: View {
 
+    @State private var update = UpdateState()
+
     private var version: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
         let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
@@ -38,7 +40,7 @@ struct AboutTab: View {
                     title: "赞赏支持",
                     rows: [
                         (.init(icon: "heart", title: "请作者喝杯咖啡",
-                               detail: "支付宝 / 微信 / 加密货币",
+                               detail: "支付宝 / 微信",
                                url: "https://github.com/TomEageer/clipflow/blob/main/DONATE.md")),
                     ],
                     footnote: "Clipflow 免费开源，没有广告、没有埋点、没有付费版。所有功能永久免费，赞赏完全自愿。")
@@ -75,14 +77,36 @@ struct AboutTab: View {
             Text("版本 \(version)")
                 .font(.system(size: 11, design: .monospaced)).foregroundStyle(.tertiary)
                 .textSelection(.enabled)
+
+            HStack(spacing: 8) {
+                if update.isChecking { ProgressView().controlSize(.small) }
+                if update.message != "尚未检查" {
+                    Text(update.message)
+                        .font(.system(size: 11))
+                        .foregroundStyle(update.hasUpdate ? Color.accentColor : .secondary)
+                }
+                Button(update.hasUpdate ? "前往下载" : "检查更新") {
+                    if update.hasUpdate { Updater.openReleasePage(); return }
+                    update = .checking()
+                    Task { @MainActor in
+                        do {
+                            let r = try await Updater.check()
+                            update = r.hasUpdate ? .available(r.latest) : .upToDate(r.current)
+                        } catch { update = .failed(error) }
+                    }
+                }
+                .controlSize(.small)
+            }
+            .padding(.top, 2)
         }
     }
 
     private var privacyNote: some View {
         VStack(spacing: 5) {
-            Label("所有数据只存在你的 Mac 上", systemImage: "lock.shield")
+            Label("剪贴板内容只存在你的 Mac 上", systemImage: "lock.shield")
                 .font(.system(size: 11, weight: .medium))
-            Text("不联网、不上传、不埋点。密码管理器复制的内容不会被记录，"
+            Text("没有埋点、没有账号、不上传任何内容。全应用唯一的网络请求是检查更新，"
+                 + "可在设置里关闭。密码管理器复制的内容不会被记录，"
                  + "识别为 token / 密钥的内容不进搜索索引。")
                 .font(.system(size: 10)).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
