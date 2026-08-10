@@ -932,3 +932,68 @@ struct SettingsTests {
         #expect(try store.count() == 10)
     }
 }
+
+// MARK: - 分类过滤
+
+@Suite("分类过滤")
+struct KindFilterTests {
+
+    private func tempStore() throws -> (ClipflowStore, URL) {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "clipflow-test-\(UUID().uuidString)")
+        return (try ClipflowStore(paths: StoragePaths(root: dir)), dir)
+    }
+
+    /// 过滤必须在 SQL 里做。若先取最近 N 条再客户端筛，
+    /// 「最近 200 条里只有 3 张图」时用户会以为图片丢了。
+    @Test("按类型过滤走 SQL，不受 limit 影响")
+    func filtersInSQL() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+
+        // 先写 1 张图，再写 50 条文本把它挤到很后面
+        try ingest.ingest(RawSnapshot(representations: [("public.png", Data(repeating: 9, count: 300), 0)]))
+        for i in 0..<50 {
+            try ingest.ingest(RawSnapshot(
+                representations: [("public.utf8-plain-text", Data("文本 \(i)".utf8), 0)]))
+        }
+
+        // 只取最近 10 条时，图片已经被挤出去了
+        #expect(try store.recent(limit: 10).contains { $0.kind == .image } == false)
+        // 但按类型过滤必须能取到
+        let images = try store.recent(limit: 10, kinds: [.image])
+        #expect(images.count == 1)
+        #expect(images.first?.kind == .image)
+    }
+
+    @Test("多类型合并过滤")
+    func multipleKinds() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        try ingest.ingest(RawSnapshot(representations: [("public.utf8-plain-text", Data("纯文本".utf8), 0)]))
+        try ingest.ingest(RawSnapshot(representations: [("public.file-url", Data("file:///a".utf8), 0)]))
+        try ingest.ingest(RawSnapshot(representations: [("public.png", Data(repeating: 7, count: 200), 0)]))
+
+        #expect(try store.recent(kinds: [.text, .fileRef]).count == 2)
+        #expect(try store.recent(kinds: [.image]).count == 1)
+        #expect(try store.recent(kinds: nil).count == 3)
+    }
+
+    @Test("各类型计数")
+    func counts() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        for i in 0..<3 {
+            try ingest.ingest(RawSnapshot(
+                representations: [("public.utf8-plain-text", Data("文本 \(i)".utf8), 0)]))
+        }
+        try ingest.ingest(RawSnapshot(representations: [("public.file-url", Data("file:///b".utf8), 0)]))
+
+        let c = try store.countsByKind()
+        #expect(c[.text] == 3)
+        #expect(c[.fileRef] == 1)
+    }
+}

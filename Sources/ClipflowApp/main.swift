@@ -182,7 +182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: 面板
 
     private func setupPanel() {
-        panel = ClipPanel(contentRect: NSRect(x: 0, y: 0, width: 700, height: 440))
+        panel = ClipPanel(contentRect: NSRect(x: 0, y: 0, width: 700, height: 470))
         panel.contentView = NSHostingView(rootView: ClipListView(model: model))
         panel.onDismiss = { [weak self] in self?.hidePanel() }
         panel.onModifierKey = { [weak self] action in

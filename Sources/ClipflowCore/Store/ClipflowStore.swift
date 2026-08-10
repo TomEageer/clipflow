@@ -105,11 +105,33 @@ public final class ClipflowStore: Sendable {
     ///   时钟精度不该决定用户看到的顺序。
     ///
     /// **恒定按时间排，绝不 ORDER BY rank。**
-    public func recent(limit: Int = 50, offset: Int = 0) throws -> [ClipItem] {
+    public func recent(limit: Int = 50, offset: Int = 0,
+                       kinds: Set<ClipKind>? = nil) throws -> [ClipItem] {
         try contentPool.read { db in
-            try ClipItem.fetchAll(db, sql: """
-                SELECT * FROM items ORDER BY pinned DESC, usedSeq DESC LIMIT ? OFFSET ?
-                """, arguments: [limit, offset])
+            guard let kinds, !kinds.isEmpty else {
+                return try ClipItem.fetchAll(db, sql: """
+                    SELECT * FROM items ORDER BY pinned DESC, usedSeq DESC LIMIT ? OFFSET ?
+                    """, arguments: [limit, offset])
+            }
+            // 过滤放进 SQL 而不是取回来再筛 —— 否则"最近 200 条里只有 3 张图"时
+            // 用户会以为图片没了
+            let marks = databaseQuestionMarks(count: kinds.count)
+            let args: [any DatabaseValueConvertible] = kinds.map(\.rawValue) + [limit, offset]
+            return try ClipItem.fetchAll(db, sql: """
+                SELECT * FROM items WHERE kind IN (\(marks))
+                ORDER BY pinned DESC, usedSeq DESC LIMIT ? OFFSET ?
+                """, arguments: StatementArguments(args))
+        }
+    }
+
+    /// 各类型的条目数，给分类标签显示计数用
+    public func countsByKind() throws -> [ClipKind: Int] {
+        try contentPool.read { db in
+            var out: [ClipKind: Int] = [:]
+            for row in try Row.fetchAll(db, sql: "SELECT kind, count(*) AS c FROM items GROUP BY kind") {
+                if let k = ClipKind(rawValue: row["kind"] as Int) { out[k] = row["c"] as Int }
+            }
+            return out
         }
     }
 

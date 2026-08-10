@@ -181,7 +181,7 @@ struct ClipListView: View {
                 PreviewPane(model: model).frame(width: 320)
             }
         }
-        .frame(width: 700, height: 440)
+        .frame(width: 700, height: 470)
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.primary.opacity(0.08)))
@@ -190,6 +190,7 @@ struct ClipListView: View {
     private var listColumn: some View {
             VStack(spacing: 0) {
                 searchBar
+                categoryBar
                 Divider().opacity(0.5)
 
                 if model.items.isEmpty {
@@ -197,7 +198,10 @@ struct ClipListView: View {
                         Spacer()
                         Image(systemName: model.query.isEmpty ? "tray" : "magnifyingglass")
                             .font(.system(size: 22)).foregroundStyle(.tertiary)
-                        Text(model.query.isEmpty ? "还没有记录任何内容" : "没有匹配结果")
+                        Text(model.query.isEmpty
+                             ? (model.category == .all ? "还没有记录任何内容"
+                                                       : "这个分类下还没有内容")
+                             : "没有匹配结果")
                             .foregroundStyle(.secondary).font(.system(size: 12))
                         Spacer()
                     }
@@ -231,6 +235,21 @@ struct ClipListView: View {
                 footer
             }
             .frame(width: 380)
+    }
+
+    /// 分类切换。用原生分段控件，点击切换，不自动跳。
+    private var categoryBar: some View {
+        Picker("", selection: $model.category) {
+            ForEach(PanelCategory.allCases) { c in
+                let n = c.count(from: model.counts)
+                Text(n > 0 ? "\(c.label) \(n)" : c.label).tag(c)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .controlSize(.small)
+        .padding(.horizontal, 10)
+        .padding(.bottom, 8)
     }
 
     private var searchBar: some View {

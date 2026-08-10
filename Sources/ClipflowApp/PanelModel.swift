@@ -14,6 +14,11 @@ final class PanelModel: ObservableObject {
     /// 只镜像左右，**不做上下反转** —— 列表倒序违反阅读直觉。
     @Published var mirrored: Bool = false
 
+    /// 当前分类。切换要靠点击，不自动跳 —— 自动跳会让人找不到刚才那条。
+    @Published var category: PanelCategory = .all { didSet { reload() } }
+    /// 各分类条目数，标签上显示
+    @Published private(set) var counts: [ClipKind: Int] = [:]
+
     private let store: ClipflowStore
     private let paster: Paster
     /// 缩略图内存缓存。磁盘缓存在 ThumbnailStore 里，这层避免滚动时反复读盘。
@@ -54,7 +59,16 @@ final class PanelModel: ObservableObject {
             // 记住当前选中的条目 id，刷新后尽量停在原处 —— 后台捕获到新内容时
             // 选中项被重置回第一条，是很打断人的
             let keepID = selectedItem?.id
-            items = q.isEmpty ? try store.recent(limit: 200) : try store.search(q, limit: 200)
+            let kinds = category.kinds
+            if q.isEmpty {
+                items = try store.recent(limit: 200, kinds: kinds)
+            } else {
+                // 搜索结果再按分类筛。搜索已限量，客户端筛的代价可忽略。
+                let hits = try store.search(q, limit: 400)
+                items = kinds.map { k in hits.filter { k.contains($0.kind) } } ?? hits
+                if items.count > 200 { items = Array(items.prefix(200)) }
+            }
+            counts = (try? store.countsByKind()) ?? [:]
             total = try store.count()
             if let keepID, let idx = items.firstIndex(where: { $0.id == keepID }) {
                 selection = idx
