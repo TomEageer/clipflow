@@ -77,6 +77,12 @@ else
   codesign --force --deep --sign - "$APP" 2>/dev/null || true
 fi
 
+# 打成可直接下载的 zip，供 GitHub Release 挂载
+if [ "${MAKE_ZIP:-0}" = "1" ]; then
+  ( cd build && rm -f Clipflow.zip && ditto -c -k --keepParent Clipflow.app Clipflow.zip )
+  echo "发布包：$(pwd)/build/Clipflow.zip  ($(du -h build/Clipflow.zip | cut -f1))"
+fi
+
 echo
 echo "完成：$(pwd)/$APP"
 echo

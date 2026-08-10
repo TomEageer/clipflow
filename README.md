@@ -4,14 +4,21 @@
 
 # Clipflow
 
-**A clipboard manager for macOS that gives you back exactly what you copied**
+**A clipboard manager that gives you back exactly what you copied**
 
 Most clipboard managers keep the text and quietly drop everything else.<br>
-Clipflow stores **every representation** the pasteboard offered — so rich text
-keeps its formatting, a multi-file copy stays multi-file, and pasting back is
-byte-identical to the original.
+Clipflow stores **every representation** the pasteboard offered — rich text keeps its<br>
+formatting, a three-file copy stays three files, and what you paste is byte-identical.
 
-[中文说明](README.zh-CN.md) · [Changelog](CHANGELOG.md) · [Donate](DONATE.md)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/TomEageer/clipflow?color=brightgreen&label=release)](https://github.com/TomEageer/clipflow/releases/latest)
+[![Download](https://img.shields.io/badge/download-3%20MB-brightgreen)](https://github.com/TomEageer/clipflow/releases/latest/download/Clipflow.zip)
+[![Search](https://img.shields.io/badge/search%20P95-0.27%20ms%20%40%201M-brightgreen)](#measured-performance)
+[![Downloads](https://img.shields.io/github/downloads/TomEageer/clipflow/total?color=brightgreen&label=downloads)](https://github.com/TomEageer/clipflow/releases)
+[![Telemetry](https://img.shields.io/badge/telemetry-none-success)](#privacy)
+[![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey)](#requirements)
+
+[**⬇ Download**](https://github.com/TomEageer/clipflow/releases/latest/download/Clipflow.zip) · [Quick start](#quick-start) · [How it works](#how-it-works) · [FAQ](#faq) · [**中文文档**](README.zh-CN.md)
 
 </div>
 
@@ -19,20 +26,40 @@ byte-identical to the original.
 
 ## Why Clipflow
 
-- **Fidelity, not just text** — one copy is one `NSPasteboardItem` carrying several
+Clipboard managers are a solved problem — until you paste. Then the formatting is
+gone, the second file vanished, and searching Chinese returns nothing. Clipflow is
+built around the paste, not the list:
+
+- 🧬 **Fidelity, not just text** — one copy is one `NSPasteboardItem` carrying several
   UTIs (`public.rtf`, `public.html`, `public.utf8-plain-text`, app-private types…).
-  Clipflow keeps all of them and writes all of them back. Copy formatted text from
-  a doc, paste it into another doc, and the formatting survives.
-- **Multi-file copies stay intact** — copy three files, get three files. The
-  pasteboard's multi-item structure is preserved, not flattened.
-- **Chinese search that actually works** — FTS5's default tokeniser treats a run of
-  Han characters as a single token, so searching 订单 never matches 订单支付回调.
-  Clipflow tokenises to bigrams in the app layer and uses phrase queries, so
-  precision holds.
-- **Fast at scale** — 1,000,000 items benchmarked at 518 MB with a P95 search of
-  0.27 ms. Latency does not degrade with size.
-- **Private by construction** — no network code, no telemetry, no account.
-  Password-manager content is never recorded.
+  All of them are stored, all of them written back. Formatting survives the round trip
+- 📎 **Multi-file copies stay intact** — copy three files, get three files. The
+  pasteboard's multi-item structure is preserved, not flattened into one
+- 🔍 **Chinese search that actually works** — FTS5's default tokeniser treats a run of
+  Han characters as one token, so searching 订单 never matches 订单支付回调. Clipflow
+  tokenises to bigrams in the app layer and uses phrase queries, so precision holds
+- ⚡ **Flat at scale** — 1,000,000 items measured at 518 MB with a P95 search of
+  **0.27 ms**. Latency does not grow with history size
+- 🔒 **Private by construction** — no network code anywhere, no telemetry, no account.
+  Password-manager content is never recorded
+
+|  | Clipflow | Paste | Maccy |
+|---|---|---|---|
+| Price | **Free (MIT)** | $9.99/year | Free |
+| Source | **Open** | Closed | Open |
+| Search index | **FTS5, separate DB** | FTS5 + spellfix1 | **None** — linear scan over memory |
+| Chinese phrase search | **Bigram + FTS5 phrase** | not verified | no index; fuzzy match, truncates at 5,000 chars |
+| Screenshot storage | transcode planned; compressed | **raw TIFF kept** | blobs inline in SQLite |
+| Database file mode | **`600`** | `644` | — |
+| Telemetry | **None** | PostHog | None |
+| Image OCR | prototyped | **yes** | no |
+
+<sub>
+Every cell here was checked against the shipped software — Maccy from its source,
+Paste from its own on-disk database and binary — not from marketing pages.
+Blank cells are things not verified rather than things assumed. Paste does dedupe by
+checksum and does OCR screenshots, both of which Clipflow does not do today.
+</sub>
 
 ## Quick start
 
@@ -126,6 +153,32 @@ sneaked in a UI dependency.
 
 Scaling to 1,000,000 items: 518 MB total, P95 search 0.27 ms — flat, not linear.
 Every number here is reproducible with the scripts in `bench/`.
+
+## FAQ
+
+**Does it work without Accessibility permission?**
+Yes. The item is placed on your clipboard and Clipflow tells you to press ⌘V — it
+never fails silently. The permission is only needed to synthesise the keystroke.
+
+**Why does it ask again after I rebuild?**
+It shouldn't. Builds are signed with a stable Apple Development certificate, so the
+designated requirement is tied to the certificate and bundle ID rather than the
+binary hash. Ad-hoc signing does invalidate the grant on every rebuild — that's why
+`build-app.sh` prefers a real identity.
+
+**Where is my data?**
+`~/Library/Application Support/Clipflow/` — a content database, a separate index
+database, and a `blobs/` directory. Directories are `700`, files `600`. Delete the
+folder and nothing is left behind.
+
+**Does it store the file when I copy a file?**
+No — and neither does any other clipboard manager. macOS puts only a `public.file-url`
+on the pasteboard when you copy a file (a 200 MB video is 76 bytes on the clipboard).
+Clipflow stores that reference and writes it back on paste.
+
+**Why is my screenshot 235 MB on the clipboard?**
+Because macOS puts screenshots on the pasteboard as **uncompressed TIFF**. The same
+image is 12 MB as PNG. Transcoding is on the roadmap; today it is stored compressed.
 
 ## Privacy
 

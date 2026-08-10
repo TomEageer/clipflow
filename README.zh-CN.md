@@ -4,13 +4,21 @@
 
 # Clipflow
 
-**能把你复制的东西原样还给你的 macOS 剪贴板管理器**
+**能把你复制的东西原样还给你的剪贴板管理器**
 
 大多数剪贴板工具只留文字，其余的悄悄丢掉。<br>
-Clipflow 保存剪贴板提供的**每一种格式**——所以富文本粘回去还带格式，
+Clipflow 保存剪贴板提供的**每一种格式**——富文本粘回去还带格式，<br>
 一次复制三个文件粘出来还是三个，**逐字节和原来一样**。
 
-[English](README.md) · [更新日志](CHANGELOG.md) · [赞赏支持](DONATE.md)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/TomEageer/clipflow?color=brightgreen&label=release)](https://github.com/TomEageer/clipflow/releases/latest)
+[![Download](https://img.shields.io/badge/下载-3%20MB-brightgreen)](https://github.com/TomEageer/clipflow/releases/latest/download/Clipflow.zip)
+[![Search](https://img.shields.io/badge/检索%20P95-0.27%20ms%20%40%20100万条-brightgreen)](#实测性能)
+[![Downloads](https://img.shields.io/github/downloads/TomEageer/clipflow/total?color=brightgreen&label=下载量)](https://github.com/TomEageer/clipflow/releases)
+[![Telemetry](https://img.shields.io/badge/遥测-无-success)](#隐私)
+[![Platform](https://img.shields.io/badge/平台-macOS%2014%2B-lightgrey)](#运行要求)
+
+[**⬇ 立即下载**](https://github.com/TomEageer/clipflow/releases/latest/download/Clipflow.zip) · [快速上手](#快速开始) · [实现要点](#实现要点) · [常见问题](#常见问题) · [**English**](README.md)
 
 </div>
 
@@ -18,15 +26,35 @@ Clipflow 保存剪贴板提供的**每一种格式**——所以富文本粘回�
 
 ## 为什么做这个
 
-- **保真，不只是文本** —— 一次复制是一个 `NSPasteboardItem` 上挂着好几种 UTI
+剪贴板管理器早就是个"已解决的问题"——**直到你粘贴**。然后格式没了、第二个文件不见了、
+搜中文搜不到。Clipflow 是围绕"粘贴"设计的，不是围绕"列表"：
+
+- 🧬 **保真，不只是文本** —— 一次复制是一个 `NSPasteboardItem` 上挂着好几种 UTI
   （`public.rtf`、`public.html`、`public.utf8-plain-text`，还有各家 App 的私有格式）。
   Clipflow 全部存下来、全部写回去。从文档里复制带格式的文字，粘到另一个文档，格式还在。
-- **多文件复制不塌陷** —— 复制三个文件就是三个文件。剪贴板的多 item 结构被完整保留，
+- 📎 **多文件复制不塌陷** —— 复制三个文件就是三个文件。剪贴板的多 item 结构被完整保留，
   不会被拍平成一个。
-- **中文搜索是真能用的** —— FTS5 自带分词器把连续汉字当成一个词元，搜「订单」
+- 🔍 **中文搜索是真能用的** —— FTS5 自带分词器把连续汉字当成一个词元，搜「订单」
   匹配不到「订单支付回调」。Clipflow 在应用层做 bigram 分词 + 短语查询，精度才立得住。
-- **规模上去也不慢** —— 100 万条实测 518 MB，检索 P95 0.27 ms，**不随规模劣化**。
-- **天然隐私** —— 没有任何联网代码，没有埋点，没有账号。密码管理器复制的内容永不记录。
+- ⚡ **规模上去也不慢** —— 100 万条实测 518 MB，检索 P95 0.27 ms，**不随规模劣化**。
+- 🔒 **天然隐私** —— 没有任何联网代码，没有埋点，没有账号。密码管理器复制的内容永不记录。
+
+|  | Clipflow | Paste | Maccy |
+|---|---|---|---|
+| 价格 | **免费（MIT）** | $9.99/年 | 免费 |
+| 源码 | **开源** | 闭源 | 开源 |
+| 搜索索引 | **FTS5，独立库** | FTS5 + spellfix1 | **无索引** —— 内存线性扫描 |
+| 中文短语检索 | **bigram + FTS5 短语** | 未实测 | 无索引，模糊匹配，超 5000 字截断 |
+| 截图存储 | 压缩存储，转码在路线图上 | **原始 TIFF 不转码** | blob 直接塞进 SQLite |
+| 数据库权限 | **`600`** | `644` | — |
+| 遥测 | **无** | PostHog | 无 |
+| 图片 OCR | 有原型未接入 | **有** | 无 |
+
+<sub>
+表里每一格都是对着实际软件核过的——Maccy 看源码，Paste 看它自己的本地数据库和二进制，
+不是抄营销页。留空的是"没验证"，不是"想当然"。
+Paste 有 checksum 去重、也做截图 OCR，这两点 Clipflow 目前都没有。
+</sub>
 
 ## 快速开始
 
@@ -105,6 +133,28 @@ M4 Pro，48000 条：
 扩到 100 万条：总计 518 MB，检索 P95 0.27 ms——**是平的，不是线性增长**。
 文中每个数字都能用 `bench/` 里的脚本复现。
 
+## 常见问题
+
+**不给辅助功能权限能用吗？**
+能。内容会放进剪贴板，Clipflow 明确提示你按 ⌘V，**不会默默失败**。
+那个权限只用于合成按键这一步。
+
+**为什么我重新编译后又要重新授权？**
+不该发生。打包脚本用稳定的 Apple Development 证书签名，指定要求绑在证书 + bundle id 上，
+不绑二进制哈希。ad-hoc 签名才会每次重编都作废授权——这正是 `build-app.sh` 优先用真实证书的原因。
+
+**数据存在哪？**
+`~/Library/Application Support/Clipflow/`——一个内容库、一个独立索引库、一个 `blobs/` 目录。
+目录 `700`、文件 `600`。删掉整个目录就干干净净。
+
+**复制文件时会把文件本体存下来吗？**
+不会，任何剪贴板工具都不会。macOS 在你复制文件时只往剪贴板放一个 `public.file-url`
+（一个 200MB 的视频在剪贴板上只有 **76 字节**）。Clipflow 存这个引用，粘贴时写回去。
+
+**为什么我的截图在剪贴板上有 235MB？**
+因为 macOS 把截图以**未压缩 TIFF** 放进剪贴板。同一张图转成 PNG 只要 12MB。
+转码在路线图上，目前是压缩后存储。
+
 ## 隐私
 
 所有数据只在你的 Mac 上。这个项目里没有任何联网代码。
@@ -134,3 +184,5 @@ M4 Pro，48000 条：
 ## 许可证
 
 MIT，见 [LICENSE](LICENSE)。使用了 [GRDB.swift](https://github.com/groue/GRDB.swift)（MIT）。
+
+<sub>Mac 剪贴板管理器 · 剪切板历史 · Paste 替代 · Maccy 替代 · macOS 剪贴板工具 · 开源剪贴板 · 中文搜索剪贴板 · 粘贴板管理 · clipboard manager macOS</sub>

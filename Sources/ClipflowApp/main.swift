@@ -31,7 +31,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.setActivationPolicy(.accessory)
 
         do {
-            store = try ClipflowStore(paths: .defaultLocation())
+            // 演示/测试用：指定数据目录，避免拿真实历史去截图或跑验证
+            let paths = ProcessInfo.processInfo.environment["CLIPFLOW_DATA_DIR"]
+                .map { StoragePaths(root: URL(fileURLWithPath: $0)) } ?? .defaultLocation()
+            store = try ClipflowStore(paths: paths)
         } catch {
             let a = NSAlert()
             a.messageText = "无法打开数据库"
@@ -54,6 +57,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setupHotKey()
         startCapture()
         startCleanupSchedule()
+
+        // 演示模式：启动即在屏幕中央打开面板，供文档截图
+        if ProcessInfo.processInfo.environment["CLIPFLOW_DEMO"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                guard let self else { return }
+                self.model.reload()
+                if let screen = NSScreen.main {
+                    let f = self.panel.frame
+                    self.panel.setFrameOrigin(NSPoint(
+                        x: screen.frame.midX - f.width / 2,
+                        y: screen.frame.midY - f.height / 2))
+                }
+                self.panel.fadeIn()
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        }
     }
 
     // MARK: 菜单栏
