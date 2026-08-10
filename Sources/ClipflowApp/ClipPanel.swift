@@ -74,7 +74,8 @@ struct ClipListView: View {
                     ScrollView {
                         LazyVStack(spacing: 0) {
                             ForEach(Array(model.items.enumerated()), id: \.element.id) { idx, item in
-                                RowView(item: item, index: idx, selected: idx == model.selection)
+                                RowView(item: item, index: idx, selected: idx == model.selection,
+                                        thumbnail: model.thumbnail(for: item))
                                     .id(item.id)
                                     .contentShape(Rectangle())
                                     .onTapGesture { model.select(idx); model.confirm() }
@@ -108,12 +109,24 @@ private struct RowView: View {
     let item: ClipItem
     let index: Int
     let selected: Bool
+    let thumbnail: NSImage?
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: icon)
-                .frame(width: 16)
-                .foregroundStyle(selected ? Color.white : .secondary)
+            if let thumbnail {
+                // 图片直接给预览 —— 「[图片 278 KB]」这种文字对用户毫无意义
+                Image(nsImage: thumbnail)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 40, height: 30)
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                    .overlay(RoundedRectangle(cornerRadius: 3)
+                        .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+            } else {
+                Image(systemName: icon)
+                    .frame(width: 40)
+                    .foregroundStyle(selected ? Color.white : .secondary)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.preview.replacingOccurrences(of: "\n", with: " "))
                     .lineLimit(1)

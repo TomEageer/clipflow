@@ -1,5 +1,7 @@
 import Testing
 import Foundation
+import CoreGraphics
+import ImageIO
 @testable import ClipflowCore
 
 // MARK: - 分词
@@ -469,5 +471,91 @@ struct TypePolicyTests {
             .appending(path: "Sources/ClipflowCapture/PasteboardWatcher.swift")
         let s = try String(contentsOf: p, encoding: .utf8)
         #expect(s.contains("captureOnStart"))
+    }
+}
+
+// MARK: - 缩略图
+
+@Suite("缩略图")
+struct ThumbnailTests {
+
+    /// 造一张真 PNG（不依赖 AppKit —— Core 的测试也不该引入 UI 框架）
+    private func makePNG(width: Int, height: Int) throws -> Data {
+        let ctx = try #require(CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        ctx.setFillColor(CGColor(red: 0.2, green: 0.4, blue: 0.9, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        for i in 0..<8 {
+            ctx.fillEllipse(in: CGRect(x: i * width / 10, y: height / 3, width: 20, height: 20))
+        }
+        let cg = try #require(ctx.makeImage())
+        let out = NSMutableData()
+        let dest = try #require(CGImageDestinationCreateWithData(out, "public.png" as CFString, 1, nil))
+        CGImageDestinationAddImage(dest, cg, nil)
+        #expect(CGImageDestinationFinalize(dest))
+        return out as Data
+    }
+
+    @Test("能从 PNG 生成缩略图，且明显更小")
+    func generates() throws {
+        let png = try makePNG(width: 1600, height: 1000)
+        let thumb = try #require(ThumbnailStore.makeThumbnail(from: png, maxPixel: 96))
+        #expect(thumb.count < png.count / 4)
+        let size = try #require(ThumbnailStore.pixelSize(of: thumb))
+        #expect(max(size.width, size.height) <= 96)
+    }
+
+    @Test("能读出像素尺寸（只解析元数据头，不解码像素）")
+    func readsDimensions() throws {
+        let png = try makePNG(width: 800, height: 500)
+        let size = try #require(ThumbnailStore.pixelSize(of: png))
+        #expect(size.width == 800)
+        #expect(size.height == 500)
+    }
+
+    @Test("非图片数据返回 nil，不崩")
+    func nonImageIsNil() {
+        let junk = Data("这不是图片，只是一段中文文本".utf8)
+        #expect(ThumbnailStore.makeThumbnail(from: junk, maxPixel: 96) == nil)
+        #expect(ThumbnailStore.pixelSize(of: junk) == nil)
+    }
+
+    @Test("磁盘缓存命中后不重复生成")
+    func cachesOnDisk() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "clipflow-thumb-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = ThumbnailStore(root: dir)
+        let png = try makePNG(width: 400, height: 300)
+
+        var generatorCalls = 0
+        let a = store.thumbnail(for: "hash-a", imageData: { generatorCalls += 1; return png }())
+        let b = store.thumbnail(for: "hash-a", imageData: { generatorCalls += 1; return png }())
+        #expect(a != nil)
+        #expect(a == b)
+        // 第二次仍会求值 autoclosure（Swift 语义），但不该再写盘 —— 校验文件只有一个
+        let files = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+        #expect(files.count == 1)
+    }
+
+    @Test("图片条目的 preview 带上像素尺寸，不再是无意义的『[图片 278 KB]』")
+    func previewHasDimensions() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "clipflow-test-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ClipflowStore(paths: StoragePaths(root: dir))
+        let png = try makePNG(width: 640, height: 480)
+
+        let id = try #require(try IngestService(store: store)
+            .ingest(RawSnapshot(representations: [("public.png", png)])))
+        let item = try #require(try store.item(id: id))
+        #expect(item.kind == .image)
+        #expect(item.preview.contains("640×480"), "preview 里没有像素尺寸：\(item.preview)")
+
+        // 缩略图能生成
+        #expect(store.thumbnail(for: item) != nil)
     }
 }

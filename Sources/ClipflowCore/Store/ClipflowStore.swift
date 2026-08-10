@@ -9,6 +9,7 @@ public final class ClipflowStore: Sendable {
 
     public let paths: StoragePaths
     public let blobs: BlobStore
+    public let thumbnails: ThumbnailStore
     private let contentPool: DatabasePool
     private let indexPool: DatabasePool
 
@@ -16,6 +17,7 @@ public final class ClipflowStore: Sendable {
         self.paths = paths
         try paths.prepare()
         self.blobs = BlobStore(root: paths.blobs)
+        self.thumbnails = ThumbnailStore(root: paths.thumbs)
 
         var config = Configuration()
         // ⚠️ 只放**每连接**的 pragma。DatabasePool 的 reader 连接是只读的，
@@ -124,6 +126,24 @@ public final class ClipflowStore: Sendable {
             let byID = Dictionary(uniqueKeysWithValues: items.compactMap { i in i.id.map { ($0, i) } })
             return ids.compactMap { byID[$0] }
         }
+    }
+
+    /// 取某条的缩略图（图片条目才有）。没有就现生成并落盘。
+    /// 列表滚动只读这个，**永不解码原图**。
+    public func thumbnail(for item: ClipItem, size: Int = ThumbnailStore.listSize) -> Data? {
+        guard item.kind == .image, let id = item.id else { return nil }
+        return thumbnails.thumbnail(for: item.contentHash, imageData: {
+            guard let reps = try? representations(of: id) else { return nil }
+            // 优先用体积最小的图片表示做缩略图源，省解码开销
+            let imageReps = reps
+                .filter { $0.uti.contains("png") || $0.uti.contains("tiff")
+                       || $0.uti.contains("jpeg") || $0.uti.contains("heic") }
+                .sorted { $0.byteSize < $1.byteSize }
+            for r in imageReps {
+                if let d = try? data(of: r), d != nil { return d }
+            }
+            return nil
+        }(), size: size)
     }
 
     public func item(id: Int64) throws -> ClipItem? {

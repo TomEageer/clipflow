@@ -332,6 +332,27 @@ do {
         try bench("search 无命中")        { try store.search("不存在的关键词xyz", limit: 20).count }
         print("\n预算：搜索首屏 P95 < 16ms（docs/00 §4）")
 
+    case "thumbs":
+        // 预生成所有图片条目的缩略图。既是预热，也是"缩略图管线真的能跑"的验证。
+        let items = try store.recent(limit: 500).filter { $0.kind == .image }
+        print("图片条目 \(items.count) 个")
+        var ok = 0, failed = 0
+        let t0 = Date()
+        for it in items {
+            let t = Date()
+            if let png = store.thumbnail(for: it) {
+                ok += 1
+                print("  ✅ #\(it.id ?? 0)  \(oneLine(it.preview, 34))  → 缩略图 \(fmtBytes(png.count))"
+                      + "  \(String(format: "%.0f", Date().timeIntervalSince(t) * 1000))ms")
+            } else {
+                failed += 1
+                print("  ❌ #\(it.id ?? 0)  \(oneLine(it.preview, 34))  生成失败")
+            }
+        }
+        let s2 = try store.stats()
+        print("\n成功 \(ok) / 失败 \(failed) · 共 \(String(format: "%.0f", Date().timeIntervalSince(t0) * 1000))ms")
+        print("原图占用 \(fmtBytes(s2.blobBytes))")
+
     case "optimize":
         let t0 = Date()
         try store.optimize()

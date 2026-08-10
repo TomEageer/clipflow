@@ -13,6 +13,8 @@ final class PanelModel: ObservableObject {
 
     private let store: ClipflowStore
     private let paster: Paster
+    /// 缩略图内存缓存。磁盘缓存在 ThumbnailStore 里，这层避免滚动时反复读盘。
+    private var thumbCache: [String: NSImage] = [:]
     var onClose: (() -> Void)?
     var onError: ((String) -> Void)?
 
@@ -28,9 +30,20 @@ final class PanelModel: ObservableObject {
                 : try store.search(query, limit: 200)
             total = try store.count()
             selection = 0
+            // 缓存别无限涨
+            if thumbCache.count > 300 { thumbCache.removeAll(keepingCapacity: true) }
         } catch {
             items = []
         }
+    }
+
+    /// 取缩略图。两级缓存：内存 → 磁盘 → 现生成。
+    func thumbnail(for item: ClipItem) -> NSImage? {
+        guard item.kind == .image else { return nil }
+        if let cached = thumbCache[item.contentHash] { return cached }
+        guard let png = store.thumbnail(for: item), let img = NSImage(data: png) else { return nil }
+        thumbCache[item.contentHash] = img
+        return img
     }
 
     func select(_ i: Int) {

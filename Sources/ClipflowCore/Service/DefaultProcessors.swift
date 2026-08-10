@@ -98,7 +98,12 @@ public struct TypeClassifier: IngestProcessor {
         if utis.contains(where: { $0.hasPrefix("public.") && ($0.contains("image") || $0 == "public.png" || $0 == "public.tiff" || $0 == "public.jpeg" || $0 == "public.heic") }) {
             context.kind = .image
             let bytes = snapshot.representations.reduce(0) { $0 + $1.data.count }
-            context.preview = "[图片 \(ByteCountFormatter().string(fromByteCount: Int64(bytes)))]"
+            let size = ByteCountFormatter().string(fromByteCount: Int64(bytes))
+            // 读像素尺寸只解析元数据头、不解码像素，代价可忽略，但对用户有用得多
+            let dims = snapshot.representations
+                .compactMap { ThumbnailStore.pixelSize(of: $0.data) }
+                .first
+            context.preview = dims.map { "图片 \($0.width)×\($0.height) · \(size)" } ?? "图片 · \(size)"
             return .accept
         }
 
