@@ -5,7 +5,7 @@ import ClipflowCore
 import ClipflowCapture
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var statusItem: NSStatusItem!
     private var panel: ClipPanel!
@@ -55,14 +55,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.image = NSImage(systemSymbolName: "doc.on.clipboard",
                                            accessibilityDescription: "Clipflow")
         statusItem.button?.image?.isTemplate = true
+
+        // ⚠️ 菜单必须**每次打开时重建**。
+        // 之前只在启动和捕获到新内容时重建，用户去系统设置授完权回来，
+        // 菜单还显示「未授权」—— 看着像 App 坏了。
+        let menu = NSMenu()
+        menu.delegate = self
+        statusItem.menu = menu
+        rebuildMenu()
+
+        // 系统在辅助功能授权变化时会广播这个通知，收到就立刻刷新
+        DistributedNotificationCenter.default().addObserver(
+            self, selector: #selector(accessibilityChanged),
+            name: NSNotification.Name("com.apple.accessibility.api"), object: nil)
+    }
+
+    /// NSMenuDelegate：菜单即将展开时重建，保证状态永远是当下的
+    func menuNeedsUpdate(_ menu: NSMenu) {
         rebuildMenu()
     }
 
+    @objc private func accessibilityChanged() {
+        // 通知到达时系统状态可能还没落定，延迟一拍再读
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            self?.rebuildMenu()
+        }
+    }
+
     private func rebuildMenu() {
-        let menu = NSMenu()
+        guard let menu = statusItem?.menu else { return }
+        menu.removeAllItems()
+
         let count = (try? store.count()) ?? 0
-        menu.addItem(withTitle: "Clipflow · 已记录 \(count) 条", action: nil, keyEquivalent: "")
-        menu.items.first?.isEnabled = false
+        let header = NSMenuItem(title: "Clipflow · 已记录 \(count) 条", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
         menu.addItem(.separator())
 
         let open = NSMenuItem(title: "打开剪贴板面板", action: #selector(togglePanel), keyEquivalent: "v")
@@ -70,12 +97,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         open.target = self
         menu.addItem(open)
 
-        if !Paster.hasAccessibilityPermission {
-            menu.addItem(.separator())
-            let perm = NSMenuItem(title: "⚠️ 授予辅助功能权限（用于自动粘贴）",
-                                  action: #selector(requestPermission), keyEquivalent: "")
-            perm.target = self
-            menu.addItem(perm)
+        menu.addItem(.separator())
+
+        // 权限状态**始终显示**，不是只在缺失时才出现。
+        // 只在缺失时显示的话，用户授权后看到条目消失，没法确认"到底成没成"。
+        let granted = Paster.hasAccessibilityPermission
+        let perm = NSMenuItem(
+            title: granted ? "✅ 自动粘贴已就绪" : "⚠️ 未授权 —— 点此授予辅助功能权限",
+            action: granted ? nil : #selector(requestPermission), keyEquivalent: "")
+        perm.target = self
+        perm.isEnabled = !granted
+        menu.addItem(perm)
+
+        if !granted {
+            let hint = NSMenuItem(title: "    （未授权也能用：内容会放进剪贴板，手动 ⌘V）",
+                                  action: nil, keyEquivalent: "")
+            hint.isEnabled = false
+            menu.addItem(hint)
+            let reopen = NSMenuItem(title: "    授权后仍显示未授权？点此重开系统设置",
+                                    action: #selector(openAccessibilitySettings), keyEquivalent: "")
+            reopen.target = self
+            menu.addItem(reopen)
         }
 
         menu.addItem(.separator())
@@ -86,7 +128,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let quit = NSMenuItem(title: "退出 Clipflow", action: #selector(NSApplication.terminate(_:)),
                               keyEquivalent: "q")
         menu.addItem(quit)
-        statusItem.menu = menu
+    }
+
+    /// 用户去系统设置操作期间轮询，回来就能看到状态已更新。
+    /// 只靠系统通知不够可靠 —— 实测有时不广播或延迟很久。
+    private var permissionPollTimer: Timer?
+    private var permissionPollTicks = 0
+
+    private func startPermissionPolling() {
+        permissionPollTimer?.invalidate()
+        permissionPollTicks = 0
+        permissionPollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            Task { @MainActor [weak self] in self?.pollPermissionOnce() }
+        }
+    }
+
+    private func pollPermissionOnce() {
+        permissionPollTicks += 1
+        rebuildMenu()
+        if Paster.hasAccessibilityPermission || permissionPollTicks > 90 {
+            permissionPollTimer?.invalidate()
+            permissionPollTimer = nil
+        }
+    }
+
+    @objc private func openAccessibilitySettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     // MARK: 面板
@@ -156,6 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func requestPermission() {
         Paster.requestAccessibilityPermission()
+        startPermissionPolling()
     }
 
     @objc private func showStats() {
