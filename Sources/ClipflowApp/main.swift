@@ -100,9 +100,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(header)
         menu.addItem(.separator())
 
-        let combo = HotKeyCombo.load()
-        let open = NSMenuItem(title: "打开剪贴板面板（\(combo.display)）",
-                              action: #selector(togglePanel), keyEquivalent: "")
+        // 显示**实际生效**的组合；一个都注册不上时明确说出来，不装作正常
+        let title = activeCombo.map { "打开剪贴板面板（\($0.display)）" }
+            ?? "打开剪贴板面板（⚠️ 快捷键未生效）"
+        let open = NSMenuItem(title: title, action: #selector(togglePanel), keyEquivalent: "")
         open.target = self
         menu.addItem(open)
 
@@ -235,22 +236,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: 热键
 
     private func setupHotKey() {
-        applyHotKey(HotKeyCombo.load())
+        // 启动时用保存的组合；注册不上就退默认、再不行就走备选。
+        // 绝不允许启动完成后处于"没有热键"的状态。
+        let saved = HotKeyCombo.load()
+        if !applyHotKey(saved, allowFallback: true) {
+            notify("全局快捷键注册失败，可能被其它 App 占用。\n请在「设置 → 快捷键」里换一个组合。")
+        }
     }
+
+    /// 当前**实际生效**的组合。可能与用户保存的不同（保存的那个注册失败时）。
+    /// 菜单与设置页都显示这个，而不是"想要的那个" —— 否则界面在骗人。
+    private(set) var activeCombo: HotKeyCombo?
 
     /// 注册/重注册全局热键。用 Carbon RegisterEventHotKey，不需要辅助功能权限 ——
     /// 唤出面板这件事本来就不该要权限。
+    ///
+    /// - Parameter allowFallback: 注册失败时是否自动退到默认/备选组合。
+    ///   启动路径必须为 true；用户手动改快捷键时为 false（该让他知道这个组合不行）。
     @discardableResult
-    func applyHotKey(_ combo: HotKeyCombo) -> Bool {
+    func applyHotKey(_ combo: HotKeyCombo, allowFallback: Bool = false) -> Bool {
+        if register(combo) { return true }
+        guard allowFallback else {
+            // 用户选的组合不可用：保持原来那个继续生效，不要让他失去热键
+            if let active = activeCombo { _ = register(active) }
+            rebuildMenu()
+            return false
+        }
+        for candidate in HotKeyCombo.fallbacks where candidate != combo {
+            if register(candidate) { return true }
+        }
+        activeCombo = nil
+        rebuildMenu()
+        return false
+    }
+
+    private func register(_ combo: HotKeyCombo) -> Bool {
         hotKey?.unregister()
         hotKey = HotKey(keyCode: combo.keyCode, modifiers: combo.carbonModifiers) { [weak self] in
             Task { @MainActor in self?.togglePanel() }
         }
-        let ok = hotKey != nil
-        if ok { combo.save() }
+        guard hotKey != nil else { activeCombo = nil; return false }
+        activeCombo = combo
+        combo.save()
         rebuildMenu()
-        return ok
+        return true
     }
+
+    /// 恢复默认快捷键
+    @discardableResult
+    static func resetHotKeyToDefault() -> Bool {
+        HotKeyCombo.reset()
+        return current?.applyHotKey(.default, allowFallback: true) ?? false
+    }
+
+    static func currentActiveCombo() -> HotKeyCombo? { current?.activeCombo }
 
     static func applyHotKeyGlobally(_ combo: HotKeyCombo) -> Bool {
         current?.applyHotKey(combo) ?? false
@@ -268,7 +307,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// 录制结束（成功或取消）后恢复。传 nil 表示恢复成已保存的那个。
     @discardableResult
     static func resumeHotKey(_ combo: HotKeyCombo? = nil) -> Bool {
-        current?.applyHotKey(combo ?? HotKeyCombo.load()) ?? false
+        // 恢复路径允许回退：宁可换个组合，也不能停在没有热键的状态
+        current?.applyHotKey(combo ?? HotKeyCombo.load(), allowFallback: true) ?? false
     }
 
     // MARK: 捕获

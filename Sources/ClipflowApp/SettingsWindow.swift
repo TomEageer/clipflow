@@ -61,8 +61,14 @@ final class SettingsModel: ObservableObject {
     @Published var query: String = "" { didSet { refreshList() } }
     @Published var selected: Set<ClipItem.ID> = []
     @Published var lastAction: String = ""
-    @Published var hotKey: HotKeyCombo = HotKeyCombo.load()
+    /// 显示**实际生效**的组合，不是"保存过的那个"。注册失败时两者会不一致，
+    /// 显示保存值等于界面在骗人。
+    @Published var hotKey: HotKeyCombo = AppDelegate.currentActiveCombo() ?? HotKeyCombo.load()
     @Published var hotKeyOK: Bool = true
+
+    func syncHotKey() {
+        hotKey = AppDelegate.currentActiveCombo() ?? HotKeyCombo.load()
+    }
 
     let store: ClipflowStore
 
@@ -72,6 +78,7 @@ final class SettingsModel: ObservableObject {
     }
 
     func refresh() {
+        syncHotKey()
         refreshList()
         breakdown = (try? store.breakdownByKind()) ?? []
         stats = try? store.stats()
@@ -222,15 +229,22 @@ private struct GeneralTab: View {
                     Spacer()
                     HotKeyRecorderView(combo: $model.hotKey) { c in
                         model.hotKeyOK = AppDelegate.applyHotKeyGlobally(c)
+                        model.syncHotKey()
                     }
-                    .frame(width: 190, height: 24)
+                    .frame(width: 180, height: 24)
+                    Button("恢复默认") {
+                        _ = AppDelegate.resetHotKeyToDefault()
+                        model.syncHotKey()
+                        model.hotKeyOK = true
+                    }
                 }
                 if !model.hotKeyOK {
-                    Label("注册失败，这个组合可能已被别的 App 占用，换一个试试",
+                    Label("这个组合已被别的 App 占用，仍在使用 \(model.hotKey.display)。换一个试试。",
                           systemImage: "exclamationmark.triangle.fill")
                         .font(.system(size: 10)).foregroundStyle(.orange)
                 }
-                Text("点一下按钮再按组合键。必须带至少一个修饰键（⌘ / ⌥ / ⌃ / ⇧），否则会劫走正常打字。")
+                Text("点一下按钮再按组合键。必须带至少一个修饰键（⌘ / ⌥ / ⌃ / ⇧），否则会劫走正常打字。"
+                     + "录制期间全局快捷键会临时停用，取消或关窗都会自动恢复。")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
 

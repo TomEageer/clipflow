@@ -12,6 +12,16 @@ struct HotKeyCombo: Codable, Equatable, Sendable {
     static let `default` = HotKeyCombo(keyCode: UInt32(kVK_ANSI_V),
                                        carbonModifiers: UInt32(cmdKey | shiftKey))
 
+    /// 默认键也被别的 App 占用时的备选，按顺序试。
+    /// 目的只有一个：**绝不允许最终停在"没有热键"的状态** —— 那等于软件坏了却查不出原因。
+    static let fallbacks: [HotKeyCombo] = [
+        HotKeyCombo(keyCode: UInt32(kVK_ANSI_V), carbonModifiers: UInt32(cmdKey | shiftKey)),
+        HotKeyCombo(keyCode: UInt32(kVK_ANSI_V), carbonModifiers: UInt32(cmdKey | optionKey)),
+        HotKeyCombo(keyCode: UInt32(kVK_ANSI_V), carbonModifiers: UInt32(controlKey | optionKey)),
+        HotKeyCombo(keyCode: UInt32(kVK_ANSI_C), carbonModifiers: UInt32(cmdKey | shiftKey | optionKey)),
+        HotKeyCombo(keyCode: UInt32(kVK_Space),  carbonModifiers: UInt32(cmdKey | shiftKey)),
+    ]
+
     /// 从 AppKit 事件转换
     init(keyCode: UInt32, carbonModifiers: UInt32) {
         self.keyCode = keyCode
@@ -85,6 +95,10 @@ struct HotKeyCombo: Codable, Equatable, Sendable {
     func save() {
         guard let d = try? JSONEncoder().encode(self) else { return }
         UserDefaults.standard.set(d, forKey: Self.key)
+    }
+
+    static func reset() {
+        UserDefaults.standard.removeObject(forKey: key)
     }
 }
 
