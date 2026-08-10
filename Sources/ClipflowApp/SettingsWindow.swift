@@ -167,14 +167,18 @@ private struct GeneralTab: View {
             }
 
             Section("容量上限") {
+                // 数值放标题行 —— 之前放在滑块右侧，把滑块挤窄了，
+                // 导致刻度行与滑块轨道宽度不同、刻度对不上实际位置。
                 VStack(alignment: .leading, spacing: 4) {
-                    HStack {
+                    HStack(spacing: 8) {
                         Text("存储上限")
                         Spacer()
                         if let st = model.stats {
-                            Text("当前已用 \(ByteCountFormatter().string(fromByteCount: Int64(st.totalBytes)))")
+                            Text("已用 \(ByteCountFormatter().string(fromByteCount: Int64(st.totalBytes)))")
                                 .font(.system(size: 10)).foregroundStyle(.secondary)
                         }
+                        Text(SizeSteps.storageLabel(model.settings.maxStorageMB))
+                            .font(.system(size: 12, design: .rounded)).bold().monospacedDigit()
                     }
                     SteppedSlider(steps: SizeSteps.storageMB,
                                   label: SizeSteps.storageLabel,
@@ -182,14 +186,24 @@ private struct GeneralTab: View {
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("条目数上限")
+                    HStack {
+                        Text("条目数上限")
+                        Spacer()
+                        Text(SizeSteps.countLabel(model.settings.maxItems))
+                            .font(.system(size: 12, design: .rounded)).bold().monospacedDigit()
+                    }
                     SteppedSlider(steps: SizeSteps.itemCounts,
                                   label: SizeSteps.countLabel,
                                   value: $model.settings.maxItems)
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("单条最大")
+                    HStack {
+                        Text("单条最大")
+                        Spacer()
+                        Text(SizeSteps.itemSizeLabel(model.settings.maxItemSizeMB))
+                            .font(.system(size: 12, design: .rounded)).bold().monospacedDigit()
+                    }
                     SteppedSlider(steps: SizeSteps.itemSizeMB,
                                   label: SizeSteps.itemSizeLabel,
                                   value: $model.settings.maxItemSizeMB)

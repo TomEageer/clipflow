@@ -1,10 +1,17 @@
+import AppKit
 import SwiftUI
 
 /// 分档滑块。
 ///
-/// 用它替代数字输入框：`TextField` 要按回车或失焦才提交，用户拖完数字看着变了、
-/// 其实没保存 —— 「设置不了存储上限」就是这么来的。滑块每动一格立即写入。
-struct SteppedSlider<T: Equatable & Comparable & BinaryInteger>: View {
+/// ## 两个坑，都踩过
+///
+/// 1. **不能用 TextField**：数字输入框要按回车或失焦才提交，用户改完看着变了、
+///    其实没写进设置 —— 「设置不了存储上限」就是这么来的。滑块每动一格立即写入。
+///
+/// 2. **刻度必须由 slider 自己画**。早期版本把刻度文字放在一个独立的 HStack 里，
+///    而 slider 右边还被数值列挤掉一截 —— 两者宽度不同，刻度和实际位置对不上。
+///    现在用 AppKit `NSSlider` 的原生 tick marks，位置由系统按档位算，不可能错位。
+struct SteppedSlider<T: Equatable & BinaryInteger>: View {
 
     let steps: [T]
     let label: (T) -> String
@@ -14,43 +21,73 @@ struct SteppedSlider<T: Equatable & Comparable & BinaryInteger>: View {
     /// 直接 `firstIndex ?? 0` 会静默显示成最小档，用户没动过却看到值变了。
     private var nearestIndex: Int {
         if let exact = steps.firstIndex(of: value) { return exact }
-        // 0 语义是"不限制"，不参与距离比较
-        let candidates = steps.enumerated().filter { $0.element != 0 }
+        let candidates = steps.enumerated().filter { $0.element != 0 }  // 0 = 不限制，不比距离
         guard let best = candidates.min(by: {
             abs(Int($0.element) - Int(value)) < abs(Int($1.element) - Int(value))
         }) else { return 0 }
         return best.offset
     }
 
-    private var index: Binding<Double> {
-        Binding(
-            get: { Double(nearestIndex) },
-            set: { newValue in
-                let i = Int(newValue.rounded())
-                guard steps.indices.contains(i) else { return }
-                value = steps[i]     // 每动一格立即生效
-            }
-        )
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack {
-                Slider(value: index, in: 0...Double(max(steps.count - 1, 1)),
-                       step: 1)
-                Text(label(value))
-                    .font(.system(size: 12, design: .rounded)).bold()
-                    .frame(width: 74, alignment: .trailing)
-                    .monospacedDigit()
-            }
-            // 刻度：首、中、尾，够定位又不挤
+        VStack(alignment: .leading, spacing: 1) {
+            TickedSlider(
+                count: steps.count,
+                index: Binding(
+                    get: { nearestIndex },
+                    set: { i in
+                        guard steps.indices.contains(i) else { return }
+                        value = steps[i]      // 每动一格立即生效
+                    }
+                )
+            )
+            .frame(height: 22)
+
+            // 只标首尾。中间档位由原生刻度点表示 —— 标文字反而挤，且容易与刻度错位。
             HStack {
                 Text(label(steps.first ?? value))
                 Spacer()
-                if steps.count > 2 { Text(label(steps[steps.count / 2])); Spacer() }
                 Text(label(steps.last ?? value))
             }
-            .font(.system(size: 9)).foregroundStyle(.tertiary)
+            .font(.system(size: 9))
+            .foregroundStyle(.tertiary)
+        }
+    }
+}
+
+/// 带原生刻度的 NSSlider。刻度位置由 AppKit 按档位数计算，与滑块轨道天然对齐。
+private struct TickedSlider: NSViewRepresentable {
+    let count: Int
+    @Binding var index: Int
+
+    func makeNSView(context: Context) -> NSSlider {
+        let s = NSSlider(value: Double(index), minValue: 0, maxValue: Double(max(count - 1, 1)),
+                         target: context.coordinator, action: #selector(Coordinator.changed(_:)))
+        s.numberOfTickMarks = count
+        s.tickMarkPosition = .below
+        s.allowsTickMarkValuesOnly = true      // 只能停在档位上，不会落在两档之间
+        s.isContinuous = true                   // 拖动过程中就生效，松手才保存太迟钝
+        s.controlSize = .small
+        return s
+    }
+
+    func updateNSView(_ nsView: NSSlider, context: Context) {
+        context.coordinator.index = $index
+        nsView.maxValue = Double(max(count - 1, 1))
+        nsView.numberOfTickMarks = count
+        if Int(nsView.doubleValue.rounded()) != index {
+            nsView.doubleValue = Double(index)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(index: $index) }
+
+    final class Coordinator: NSObject {
+        var index: Binding<Int>
+        init(index: Binding<Int>) { self.index = index }
+
+        @objc func changed(_ sender: NSSlider) {
+            let i = Int(sender.doubleValue.rounded())
+            if index.wrappedValue != i { index.wrappedValue = i }
         }
     }
 }
@@ -69,7 +106,6 @@ enum SizeSteps {
         }
     }
 
-    /// 条目数上限。0 = 不限制。
     static let itemCounts: [Int] = [100, 500, 1000, 5000, 10000, 50000, 100000, 0]
 
     static func countLabel(_ n: Int) -> String {
@@ -80,7 +116,6 @@ enum SizeSteps {
         }
     }
 
-    /// 单条大小上限
     static let itemSizeMB: [Int] = [1, 5, 10, 20, 50, 100, 200, 500]
 
     static func itemSizeLabel(_ mb: Int) -> String { "\(mb) MB" }
