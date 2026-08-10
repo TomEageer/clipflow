@@ -40,6 +40,8 @@ built around the paste, not the list:
   tokenises to bigrams in the app layer and uses phrase queries, so precision holds
 - ⚡ **Flat at scale** — 1,000,000 items measured at 518 MB with a P95 search of
   **0.27 ms**. Latency does not grow with history size
+- 👁 **Searchable screenshots** — text inside images is recognised locally with Apple
+  Vision and folded into the search index, so `KUMQUAT7788` in a screenshot is findable
 - 🔒 **Private by construction** — no telemetry, no account, nothing leaves your Mac.
   The only network request in the whole app is the update check, and it only fires
   when you ask for it (or leave auto-check on). Password-manager content is never recorded
@@ -53,7 +55,7 @@ built around the paste, not the list:
 | Screenshot storage | transcode planned; compressed | **raw TIFF kept** | blobs inline in SQLite |
 | Database file mode | **`600`** | `644` | — |
 | Telemetry | **None** | PostHog | None |
-| Image OCR | prototyped | **yes** | no |
+| Image OCR | **yes** | **yes** | no |
 
 <sub>
 Every cell here was checked against the shipped software — Maccy from its source,

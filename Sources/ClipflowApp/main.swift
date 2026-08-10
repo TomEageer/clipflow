@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var settingsWC: SettingsWindowController?
     private var settings = ClipflowSettings.load()
     private var cleanupTimer: Timer?
+    private var ocrWorker: OCRWorker?
     /// 可观测：上次粘贴等待前台就绪花了多久
     private(set) var lastPasteWaitMs: Double = 0
 
@@ -58,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         startCapture()
         startCleanupSchedule()
         autoCheckUpdatesIfEnabled()
+        startOCR()
 
         // 演示模式：启动即在屏幕中央打开面板，供文档截图
         if ProcessInfo.processInfo.environment["CLIPFLOW_DEMO"] == "1" {
@@ -79,10 +81,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: 菜单栏
 
     private func setupStatusItem() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "doc.on.clipboard",
-                                           accessibilityDescription: "Clipflow")
-        statusItem.button?.image?.isTemplate = true
+        // 用 squareLength + 固定 18×18 模板图，与系统图标对齐。
+        //
+        // 默认直接塞 SF Symbol 会得到 16×18 —— 比系统自带图标（高 11~14）高出一截，
+        // 在菜单栏里显得又大又挤、跟邻居对不齐。这里把字形按比例缩到 15pt 高
+        // 再居中画进 18×18 画布，宽高就固定了，换任何符号都不会变形。
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem.button?.image = Self.menuBarIcon(symbol: "doc.on.clipboard")
 
         // ⚠️ 菜单必须**每次打开时重建**。
         // 之前只在启动和捕获到新内容时重建，用户去系统设置授完权回来，
@@ -108,6 +113,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
             self?.rebuildMenu()
         }
+    }
+
+    /// 把 SF Symbol 规整成菜单栏标准尺寸的模板图。
+    static func menuBarIcon(symbol: String, canvas: CGFloat = 18, glyphHeight: CGFloat = 15) -> NSImage? {
+        guard let src = NSImage(systemSymbolName: symbol, accessibilityDescription: "Clipflow") else {
+            return nil
+        }
+        let scale = glyphHeight / max(src.size.height, 1)
+        let w = src.size.width * scale, h = src.size.height * scale
+
+        let out = NSImage(size: NSSize(width: canvas, height: canvas))
+        out.lockFocus()
+        src.draw(in: NSRect(x: (canvas - w) / 2, y: (canvas - h) / 2, width: w, height: h),
+                 from: .zero, operation: .sourceOver, fraction: 1)
+        out.unlockFocus()
+        out.isTemplate = true      // 跟随菜单栏明暗自动反色
+        return out
     }
 
     private func rebuildMenu() {
@@ -448,6 +470,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         settingsWC?.show(tab: 3)
     }
 
+    /// 启动 OCR 后台工作者，并做一次自检。
+    ///
+    /// 自检是必要的：accurate 超限时**静默返回空数组、不报错**，
+    /// 是"代码在跑但什么都没索引"的典型形态。识别不出就写进粘贴日志，能被发现。
+    private func startOCR() {
+        guard ClipflowSettings.load().enableOCR else { return }
+        let w = OCRWorker(store: store)
+        ocrWorker = w
+        Task.detached(priority: .utility) {
+            let check = await w.runSelfCheck()
+            PasteLog.write("OCR 自检: \(check.passed ? "通过" : "失败") — \(check.detail)")
+            await w.start()
+        }
+    }
+
     /// 定期按设置清理。启动 30s 后跑一次，之后每小时一次。
     /// 不在启动瞬间跑 —— 那会和"启动时捕获剪贴板"抢资源，用户还什么都没看到就先卡一下。
     private func startCleanupSchedule() {
@@ -512,6 +549,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hotKey?.unregister()
         watcher?.stop()
         captureTask?.cancel()
+        if let w = ocrWorker { Task { await w.stop() } }
         try? store?.optimize()
     }
 }

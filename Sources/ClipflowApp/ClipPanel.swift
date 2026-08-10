@@ -318,10 +318,23 @@ private struct PreviewPane: View {
 
                     ScrollView {
                         if let big = model.largePreview(for: item) {
-                            Image(nsImage: big)
-                                .resizable().aspectRatio(contentMode: .fit)
-                                .frame(maxWidth: .infinity)
-                                .padding(10)
+                            VStack(alignment: .leading, spacing: 8) {
+                                Image(nsImage: big)
+                                    .resizable().aspectRatio(contentMode: .fit)
+                                    .frame(maxWidth: .infinity)
+                                // 图里识别出的文字 —— 搜索能命中它，所以要让用户看得见
+                                if let ocr = model.ocrText(for: item) {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Label("图中文字", systemImage: "text.viewfinder")
+                                            .font(.system(size: 10)).foregroundStyle(.secondary)
+                                        Text(ocr)
+                                            .font(.system(size: 10))
+                                            .textSelection(.enabled)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                }
+                            }
+                            .padding(10)
                         } else {
                             Text(model.fullText(for: item))
                                 .font(.system(size: 11,

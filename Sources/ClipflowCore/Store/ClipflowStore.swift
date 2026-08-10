@@ -86,6 +86,14 @@ public final class ClipflowStore: Sendable {
         return newID
     }
 
+    /// 供同模块扩展访问索引库（OCR 队列等）
+    func indexPoolWrite<T>(_ block: (Database) throws -> T) throws -> T {
+        try indexPool.write(block)
+    }
+    func indexPoolRead<T>(_ block: (Database) throws -> T) throws -> T {
+        try indexPool.read(block)
+    }
+
     public func indexFTS(itemID: Int64, text: String) throws {
         let tok = BigramTokenizer.tokenize(text)
         try indexPool.write { db in

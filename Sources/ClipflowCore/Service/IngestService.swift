@@ -132,6 +132,13 @@ public struct IngestService: Sendable {
             }
         }
 
-        return try store.insert(item: item, representations: reps)
+        let id = try store.insert(item: item, representations: reps)
+
+        // 图片排队等 OCR。**不阻塞入库** —— OCR 是秒级任务，先落库再慢慢做。
+        if ctx.kind == .image, ctx.sensitivity == .normal {
+            let hash = reps.first(where: { $0.blobHash != nil })?.blobHash ?? contentHash
+            try? store.enqueueOCR(itemID: id, blobHash: hash)
+        }
+        return id
     }
 }

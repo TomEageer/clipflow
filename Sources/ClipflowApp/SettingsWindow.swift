@@ -75,6 +75,7 @@ final class SettingsModel: ObservableObject {
     @Published var hotKey: HotKeyCombo = AppDelegate.currentActiveCombo() ?? HotKeyCombo.load()
     @Published var hotKeyOK: Bool = true
     @Published var updateState = UpdateState()
+    @Published private(set) var ocrStats: (done: Int, pending: Int, skipped: Int)?
 
     func checkForUpdates() {
         updateState = .checking()
@@ -103,6 +104,7 @@ final class SettingsModel: ObservableObject {
         syncHotKey()
         refreshList()
         breakdown = (try? store.breakdownByKind()) ?? []
+        ocrStats = try? store.ocrStats()
         stats = try? store.stats()
     }
 
@@ -275,6 +277,19 @@ private struct GeneralTab: View {
                         .font(.system(size: 10)).foregroundStyle(.orange)
                 }
                 Text("点一下按钮再按组合键，必须带至少一个修饰键。录制期间全局快捷键临时停用，取消或关窗会自动恢复。")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+
+            Section("图片文字识别") {
+                Toggle("识别截图里的文字，使其可被搜索", isOn: $model.settings.enableOCR)
+                if let o = model.ocrStats {
+                    LabeledContent("已识别") {
+                        Text("\(o.done) 张 · 待处理 \(o.pending) · 无文字或跳过 \(o.skipped)")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                }
+                Text("完全在本机运行（Apple Vision），不联网。低电量模式下自动暂停。"
+                     + "识别到密码 / 密钥类文字的图片，结果不会进入搜索索引。改动后重启生效。")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
 

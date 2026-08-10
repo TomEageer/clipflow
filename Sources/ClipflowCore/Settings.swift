@@ -55,6 +55,8 @@ public struct ClipflowSettings: Codable, Sendable, Equatable {
     public var captureOnStart: Bool = true
     /// 启动时自动检查更新。默认开，但这是本应用唯一的网络请求，可随时关掉。
     public var autoCheckUpdates: Bool = true
+    /// 对图片做文字识别，让截图里的文字可被搜索。完全本地（Vision 框架），但耗电。
+    public var enableOCR: Bool = true
 
     public init() {}
 

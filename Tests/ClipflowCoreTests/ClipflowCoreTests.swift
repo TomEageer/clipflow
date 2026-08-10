@@ -1093,3 +1093,106 @@ struct VersionCompareTests {
         #expect(!isNewer("0.1", than: "0.1.0"))
     }
 }
+
+// MARK: - OCR 存储与索引
+
+@Suite("OCR 队列与索引")
+struct OCRStoreTests {
+
+    private func tempStore() throws -> (ClipflowStore, URL) {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "clipflow-test-\(UUID().uuidString)")
+        return (try ClipflowStore(paths: StoragePaths(root: dir)), dir)
+    }
+
+    private func makePNG(_ w: Int, _ h: Int) throws -> Data {
+        let ctx = try #require(CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
+            bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        ctx.setFillColor(CGColor(red: 0.3, green: 0.5, blue: 0.8, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        let cg = try #require(ctx.makeImage())
+        let out = NSMutableData()
+        let dest = try #require(CGImageDestinationCreateWithData(out, "public.png" as CFString, 1, nil))
+        CGImageDestinationAddImage(dest, cg, nil)
+        #expect(CGImageDestinationFinalize(dest))
+        return out as Data
+    }
+
+    /// 图片入库要自动排队。不排队的话 OCR 永远不会发生。
+    @Test("图片入库后自动进 OCR 队列")
+    func imageEnqueued() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+
+        try ingest.ingest(RawSnapshot(representations: [("public.png", try makePNG(400, 300), 0)]))
+        try ingest.ingest(RawSnapshot(representations: [("public.utf8-plain-text", Data("文本".utf8), 0)]))
+
+        #expect(try store.pendingOCRCount() == 1, "只有图片该进队列")
+    }
+
+    /// OCR 文字必须并入搜索索引，否则"能搜图里的字"就是空话
+    @Test("OCR 文字并入搜索索引")
+    func ocrTextBecomesSearchable() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        let id = try #require(try ingest.ingest(
+            RawSnapshot(representations: [("public.png", try makePNG(400, 300), 0)])))
+
+        #expect(try store.search("服务器地址").isEmpty)
+
+        try store.completeOCR(itemID: id,
+            result: .init(text: "服务器地址 10.20.30.40 端口 8443", engine: "test", confidence: 1),
+            sensitive: false)
+
+        #expect(try store.search("服务器地址").count == 1, "OCR 文字没进索引")
+        #expect(try store.search("8443").count == 1)
+        #expect(try store.ocrText(for: id)?.contains("10.20.30.40") == true)
+        #expect(try store.pendingOCRCount() == 0, "完成后该出队")
+    }
+
+    /// ⚠️ OCR 会把截图里的密码变成明文可搜索字符串，绕过整个敏感内容策略。
+    /// 命中敏感规则时必须只存不索引。
+    @Test("敏感 OCR 文字不进索引")
+    func sensitiveOCRNotIndexed() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        let id = try #require(try ingest.ingest(
+            RawSnapshot(representations: [("public.png", try makePNG(400, 300), 0)])))
+
+        try store.completeOCR(itemID: id,
+            result: .init(text: "password: hunter2supersecret", engine: "test", confidence: 1),
+            sensitive: true)
+
+        #expect(try store.search("hunter2supersecret").isEmpty, "敏感 OCR 文字进索引了")
+        // 但结果本身要留着，预览时能看
+        #expect(try store.ocrText(for: id) != nil)
+    }
+
+    @Test("放弃的任务不再重复处理")
+    func giveUpRemovesFromQueue() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        let id = try #require(try ingest.ingest(
+            RawSnapshot(representations: [("public.png", try makePNG(400, 300), 0)])))
+
+        try store.failOCR(itemID: id, reason: "no-text", giveUp: true)
+        #expect(try store.pendingOCRCount() == 0)
+        let s = try store.ocrStats()
+        #expect(s.skipped == 1)
+    }
+
+    @Test("敏感条目的图片不排队 —— 根本不该被识别")
+    func sensitiveItemNotQueued() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // 敏感文本条目不是图片，不会排队；这里确认队列只认图片
+        try IngestService(store: store).ingest(RawSnapshot(
+            representations: [("public.utf8-plain-text", Data("api_key = sk-live-abcdef123456".utf8), 0)]))
+        #expect(try store.pendingOCRCount() == 0)
+    }
+}

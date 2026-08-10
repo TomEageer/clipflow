@@ -119,6 +119,14 @@ final class PanelModel: ObservableObject {
         return text
     }
 
+    /// 图片条目的 OCR 文本，用于预览面板展示"图里有什么字"
+    func ocrText(for item: ClipItem) -> String? {
+        guard item.kind == .image, let id = item.id else { return nil }
+        guard let text = (try? store.ocrText(for: id)) ?? nil,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return text
+    }
+
     /// 底部那行：这条到底存了哪些格式、各多大。保真度是本项目的卖点，得看得见。
     func formatSummary(for item: ClipItem) -> String {
         guard let id = item.id, let reps = try? store.representations(of: id) else { return "" }

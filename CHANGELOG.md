@@ -25,6 +25,9 @@ First public release.
   always stays on the side nearest the mouse
 - Live preview pane, image thumbnails, type categories, keyboard-first navigation
 - Pastes back into whatever app you came from, with focus restored
+- **Image OCR** — text inside screenshots is recognised locally (Apple Vision) and
+  becomes searchable; runs on a persistent queue, pauses in Low Power Mode, and
+  results matching password/key patterns are stored but kept out of the index
 
 ### Privacy
 
@@ -40,4 +43,3 @@ First public release.
 - Ingest throughput is ~2700 items/s (one transaction per item). Fine for real
   clipboard use; a bulk-import feature would need batching
 - Encryption at rest is not implemented yet
-- Image OCR is prototyped but not wired into the pipeline

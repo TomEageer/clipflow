@@ -93,7 +93,7 @@ func printItems(_ items: [ClipItem]) {
 
 // MARK: - 执行
 
-do {
+@MainActor func run() async throws {
     let store = try ClipflowStore(paths: paths)
     let ingest = IngestService(store: store)
 
@@ -297,7 +297,9 @@ do {
             sources.append(src)
         }
         defer { sources.forEach { $0.cancel() } }
-        sem.wait()
+        // 顶层已在 async 上下文，不能用 DispatchSemaphore.wait；直接挂起等信号处理器 exit
+        while !Task.isCancelled { try await Task.sleep(nanoseconds: 1_000_000_000) }
+        _ = sem
 
     case "bench":
         // 预热后重复测量，区分「首次连接开销」与「稳态查询耗时」。
@@ -368,8 +370,29 @@ do {
             // ⚠️ 实测：写入进程一退出，多 item 内容会塌成 1 个。
             //    命令行工具写完就退，读到的是假象 —— 必须保持存活。
             print("多 item 内容需要写入进程保持存活，按 Ctrl+C 结束（保持 60s）")
-            Thread.sleep(forTimeInterval: 60)
+            try await Task.sleep(nanoseconds: 60_000_000_000)
         }
+
+    case "ocr":
+        // 手动跑一遍 OCR 队列。既是验证入口，也给用户补跑历史图片用。
+        let worker = OCRWorker(store: store)
+        let before = try store.ocrStats()
+        print("待处理 \(before.pending) 张（已识别 \(before.done)，跳过 \(before.skipped)）")
+
+        let check = await worker.runSelfCheck()
+        print("自检: \(check.passed ? "ok  " : "FAIL") \(check.detail)")
+        guard before.pending > 0 else { print("队列为空"); break }
+
+        let t0 = Date()
+        while await worker.drainOnce(limit: 20) {
+            let s = try store.ocrStats()
+            if s.pending == 0 { break }
+        }
+        let after = try store.ocrStats()
+        let st = await worker.stats
+        print("处理 \(st.processed) 张 · 识别出文字 \(st.recognized) · 无文字 \(st.noText) · 失败 \(st.failed)"
+              + " · 耗时 \(String(format: "%.1f", Date().timeIntervalSince(t0)))s")
+        print("现在: 已识别 \(after.done) · 待处理 \(after.pending) · 跳过 \(after.skipped)")
 
     case "optimize":
         let t0 = Date()
@@ -389,10 +412,20 @@ do {
         print(usage)
         exit(1)
     }
-} catch {
-    FileHandle.standardError.write(Data("错误: \(error)\n".utf8))
-    exit(1)
 }
+
+// ⚠️ 不能用 DispatchSemaphore 阻塞主线程等任务完成。
+//    VisionKit 的 ImageAnalyzer 是 @MainActor 的，主线程被阻塞时它永远跑不起来
+//    —— 会直接挂死（踩过，卡了十分钟）。必须泵 run loop。
+Task { @MainActor in
+    do { try await run() }
+    catch {
+        FileHandle.standardError.write(Data("错误: \(error)\n".utf8))
+        exit(1)
+    }
+    exit(0)
+}
+RunLoop.main.run()
 
 // detached task 里不能调 @MainActor 的 helper，这里提供一份无隔离版本。
 enum Formatting {
