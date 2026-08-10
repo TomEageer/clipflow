@@ -83,13 +83,27 @@ public final class Paster: @unchecked Sendable {
         writeToPasteboard(representations)
         watcher?.suppressNextChange()
 
+        // 写完立刻自检：接收方会用什么方式读，我们就用什么方式验
         let pb = NSPasteboard.general
         let wroteItems = Set(representations.map(\.itemIndex)).count
         let readBack = pb.pasteboardItems?.count ?? -1
         let utis = Set(representations.map(\.uti)).sorted().joined(separator: ",")
-        PasteLog.write("stage: 写入 \(representations.count) rep / \(wroteItems) item"
+        var line = "stage: 写入 \(representations.count) rep / \(wroteItems) item"
             + " → 回读 \(readBack) item · 类型 [\(utis)]"
-            + (readBack != wroteItems ? "  ⚠️ item 数对不上" : ""))
+        if readBack != wroteItems { line += "  ⚠️ item 数对不上" }
+
+        let fileCount = representations.filter { $0.uti == "public.file-url" }.count
+        if fileCount > 0 {
+            let urls = (pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL]) ?? []
+            let names = pb.propertyList(forType: NSPasteboard.PasteboardType("NSFilenamesPboardType")) as? [String]
+            let existing = urls.filter { FileManager.default.fileExists(atPath: $0.path) }.count
+            line += "\n        文件自检: 期望 \(fileCount) 个 → readObjects \(urls.count) 个"
+                + " · NSFilenames \(names?.count ?? -1) 个 · 磁盘上真实存在 \(existing) 个"
+            if existing < urls.count {
+                line += "  ⚠️ 有文件已被移动或删除，接收方粘不出来"
+            }
+        }
+        PasteLog.write(line)
     }
 
     /// 等目标 App 真正回到前台，然后合成 ⌘V。
@@ -166,6 +180,20 @@ public final class Paster: @unchecked Sendable {
         }
         guard !items.isEmpty else { return }
         pb.writeObjects(items)
+
+        // 文件条目额外补 NSFilenamesPboardType（老式路径）。
+        // 现代 API 只需 public.file-url，但不少 App（尤其带 Qt/Electron 外壳的）
+        // 只认这个老类型。系统有时会自动合成，有时不会 —— 显式写一份，零成本。
+        let paths = representations
+            .filter { $0.uti == "public.file-url" }
+            .compactMap { rep -> String? in
+                guard let s = String(data: rep.data, encoding: .utf8),
+                      let u = URL(string: s), u.isFileURL else { return nil }
+                return u.path
+            }
+        if !paths.isEmpty {
+            pb.setPropertyList(paths, forType: NSPasteboard.PasteboardType("NSFilenamesPboardType"))
+        }
     }
 
     /// 合成 Cmd+V。用 CGEvent 而非 AppleScript —— 更快且不依赖自动化权限。
