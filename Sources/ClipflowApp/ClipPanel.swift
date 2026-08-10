@@ -218,11 +218,12 @@ struct ClipListView: View {
                             }
                             .padding(.vertical, 4)
                         }
-                        .onChange(of: model.selection) { _, new in
-                            guard new < model.items.count else { return }
-                            withAnimation(.easeOut(duration: 0.12)) {
-                                proxy.scrollTo(model.items[new].id, anchor: .center)
-                            }
+                        // 只跟随**键盘**移动滚动。鼠标划过绝不滚 ——
+                        // 否则列表会追着鼠标跑（划过→选中→滚动→鼠标下换行→再选中…）。
+                        .onChange(of: model.scrollToken) { _, _ in
+                            let i = model.selection
+                            guard i < model.items.count else { return }
+                            proxy.scrollTo(model.items[i].id, anchor: .center)
                         }
                     }
                 }

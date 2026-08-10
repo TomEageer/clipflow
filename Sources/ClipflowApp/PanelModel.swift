@@ -118,25 +118,36 @@ final class PanelModel: ObservableObject {
 
     // MARK: 交互
 
-    func select(_ i: Int) {
+    /// 选中项是被谁改的。**只有键盘驱动的改变才允许自动滚动。**
+    ///
+    /// 鼠标划过即选中 + 选中即滚动 = 反馈循环：
+    /// 划过 → 选中 → 滚动 → 列表位移 → 鼠标下换了一行 → 又选中 → 又滚动。
+    /// 列表会追着鼠标跑，非常难受。
+    enum SelectionSource { case mouse, keyboard }
+
+    /// 递增计数器。只在键盘驱动时 +1，视图据此决定要不要滚动。
+    @Published private(set) var scrollToken: Int = 0
+
+    func select(_ i: Int, from source: SelectionSource = .mouse) {
         guard i >= 0, i < items.count, i != selection else { return }
         selection = i
+        if source == .keyboard { scrollToken += 1 }
     }
 
     func handleKey(_ action: KeyAction) -> Bool {
         switch action {
         case .up:
             // 到顶再往上就回到最后一条，循环比"卡住不动"顺手
-            selection = selection > 0 ? selection - 1 : max(0, items.count - 1)
+            select(selection > 0 ? selection - 1 : max(0, items.count - 1), from: .keyboard)
             return true
         case .down:
-            selection = selection < items.count - 1 ? selection + 1 : 0
+            select(selection < items.count - 1 ? selection + 1 : 0, from: .keyboard)
             return true
         case .confirm:  confirm(); return true
         case .cancel:   onClose?(); return true
         case .pick(let i):
             guard i < items.count else { return true }
-            selection = i; confirm(); return true
+            select(i, from: .keyboard); confirm(); return true
         case .pin:      togglePin(); return true
         case .delete:   deleteSelected(); return true
         }
