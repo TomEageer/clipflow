@@ -11,6 +11,8 @@ let package = Package(
         .library(name: "ClipflowCapture", targets: ["ClipflowCapture"]),
         // CLI 不是附赠品——它是「Core 真的零 UI 依赖」的强制验证
         .executable(name: "clipflow", targets: ["ClipflowCLI"]),
+        // 真正能用的 App：菜单栏 + 全局热键 + 鼠标旁面板 + 粘回原应用
+        .executable(name: "ClipflowApp", targets: ["ClipflowApp"]),
     ],
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
@@ -30,6 +32,11 @@ let package = Package(
         ),
         .executableTarget(
             name: "ClipflowCLI",
+            dependencies: ["ClipflowCore", "ClipflowCapture"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .executableTarget(
+            name: "ClipflowApp",
             dependencies: ["ClipflowCore", "ClipflowCapture"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),

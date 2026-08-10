@@ -2,9 +2,32 @@
 
 macOS 剪贴板管理器。原生 Swift，架构自由度 / 性能 / 拓展性优先。
 
-> 工作代号，正式名待定。当前进度：**M1 完成**（已能真正记录剪贴板）。
+> 工作代号，正式名待定。**已经能日常使用了**：菜单栏常驻、⌘⇧V 唤出、粘回原应用。
 
-## 现在能干什么
+## 装上就能用
+
+```bash
+./scripts/build-app.sh          # 打包
+open build/Clipflow.app         # 运行
+```
+
+菜单栏出现剪贴板图标，之后：
+
+| 操作 | 说明 |
+|---|---|
+| **⌘⇧V** | 在**鼠标旁**唤出面板 |
+| 直接打字 | 实时搜索（中文走 bigram 短语查询） |
+| ↑↓ | 选择 |
+| **⏎** | 粘回你刚才所在的那个 App |
+| ⌘1~⌘9 | 直接选第 N 条 |
+| esc | 关闭 |
+
+首次自动粘贴需要在「系统设置 → 隐私与安全性 → 辅助功能」勾选 Clipflow。
+**没授权也能用**——面板会把内容放进剪贴板并明确提示你手动 ⌘V，不会静默失败。
+
+密码管理器复制的内容不会被记录；识别为 token/密钥的条目标 🔒 且不进搜索索引。
+
+## 命令行（同一个引擎）
 
 ```bash
 swift build -c release
@@ -26,7 +49,8 @@ swift build -c release
 
 ```
 ClipflowCore     核心引擎 —— 零 UI 依赖，可被 App / CLI / 未来任何 Shell 复用
-ClipflowCapture  捕获层 —— 唯一允许 import AppKit 的非 UI 目标（NSPasteboard 在 AppKit 里）
+ClipflowCapture  捕获层 —— 唯一允许 import AppKit 的非 UI 目标（NSPasteboard / 粘贴引擎）
+ClipflowApp      菜单栏 App —— 热键 + 鼠标旁面板 + 粘回原应用
 ClipflowCLI      命令行客户端 —— 不是附赠品，是「Core 真的解耦」的强制验证
 ```
 
@@ -87,8 +111,8 @@ swift test    # 33 个测试，7 个套件
 |---|---|---|
 | **M0** | Package 切分 + GRDB schema + migrator + CLI | ✅ **完成** |
 | **M1** | 剪贴板捕获：轮询 + 全 representation + concealed 过滤 | ✅ **完成** |
-| M2 | 检索完善 + 性能 CI 断言 + SQLCipher 决策闸门 | |
-| M3 | 热键 + 鼠标旁面板 + 焦点恢复 + CGEvent 粘贴 | |
+| M2 | 检索完善 + 性能 CI 断言 + SQLCipher 决策闸门 | 未做（不挡使用） |
+| **M3** | 热键 + 鼠标旁面板 + 焦点恢复 + CGEvent 粘贴 | ✅ **完成** |
 | M4 | Transform 链 + PasteProfileLearner + 图片 OCR | |
 | M5 | 扩展契约 + 设置界面 + 签名分发 | |
 
