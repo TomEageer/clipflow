@@ -850,3 +850,85 @@ struct CleanupTests {
         }
     }
 }
+
+// MARK: - 设置持久化与生效
+
+@Suite("设置")
+struct SettingsTests {
+
+    private func tempDefaults() -> UserDefaults {
+        let d = UserDefaults(suiteName: "clipflow-test-\(UUID().uuidString)")!
+        return d
+    }
+
+    @Test("设置能存能读，改动不丢")
+    func roundTrip() {
+        let d = tempDefaults()
+        var s = ClipflowSettings()
+        s.maxStorageMB = 4096
+        s.maxItems = 5000
+        s.retention = .days30
+        s.sensitiveTTL = .minutes10
+        s.save(to: d)
+
+        let back = ClipflowSettings.load(from: d)
+        #expect(back.maxStorageMB == 4096)
+        #expect(back.maxItems == 5000)
+        #expect(back.retention == .days30)
+        #expect(back.sensitiveTTL == .minutes10)
+    }
+
+    @Test("没存过时给出合理默认值")
+    func defaults() {
+        let s = ClipflowSettings.load(from: tempDefaults())
+        #expect(s.maxStorageMB == 2048)
+        #expect(s.retention == .days365)
+        #expect(s.sensitiveTTL == .seconds60)
+        #expect(s.captureOnStart)
+    }
+
+    /// 存储上限必须真的生效 —— 之前用输入框设不上，本质是设了也没写进去
+    @Test("存储上限触发清理")
+    func storageLimitTriggersCleanup() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "clipflow-test-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ClipflowStore(paths: StoragePaths(root: dir))
+        let ingest = IngestService(store: store)
+
+        // 灌到明显超过 1MB
+        let chunk = String(repeating: "存储上限测试内容，需要占一些空间。", count: 400)
+        for i in 0..<40 { try ingest.ingest(RawSnapshot(
+            representations: [("public.utf8-plain-text", Data("\(i) \(chunk)".utf8), 0)])) }
+        let before = try store.count()
+        #expect(before == 40)
+
+        var s = ClipflowSettings()
+        s.retention = .forever
+        s.maxItems = 0
+        s.maxStorageMB = 1          // 1MB 上限，必然触发
+        let r = try store.cleanup(settings: s)
+        #expect(r.byStorage > 0, "存储上限没触发清理")
+        #expect(try store.count() < before)
+    }
+
+    /// 0 表示不限制，不能被当成"上限为 0 所以全删"
+    @Test("上限设为 0 表示不限制")
+    func zeroMeansUnlimited() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "clipflow-test-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ClipflowStore(paths: StoragePaths(root: dir))
+        let ingest = IngestService(store: store)
+        for i in 0..<10 { try ingest.ingest(RawSnapshot(
+            representations: [("public.utf8-plain-text", Data("条目 \(i)".utf8), 0)])) }
+
+        var s = ClipflowSettings()
+        s.retention = .forever
+        s.maxItems = 0
+        s.maxStorageMB = 0
+        let r = try store.cleanup(settings: s)
+        #expect(r.total == 0, "不限制却删了东西")
+        #expect(try store.count() == 10)
+    }
+}

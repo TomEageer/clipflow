@@ -167,28 +167,35 @@ private struct GeneralTab: View {
             }
 
             Section("容量上限") {
-                HStack {
-                    Text("存储上限")
-                    Spacer()
-                    TextField("", value: $model.settings.maxStorageMB, format: .number)
-                        .frame(width: 80).multilineTextAlignment(.trailing)
-                    Text("MB").foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("存储上限")
+                        Spacer()
+                        if let st = model.stats {
+                            Text("当前已用 \(ByteCountFormatter().string(fromByteCount: Int64(st.totalBytes)))")
+                                .font(.system(size: 10)).foregroundStyle(.secondary)
+                        }
+                    }
+                    SteppedSlider(steps: SizeSteps.storageMB,
+                                  label: SizeSteps.storageLabel,
+                                  value: $model.settings.maxStorageMB)
                 }
-                HStack {
+
+                VStack(alignment: .leading, spacing: 4) {
                     Text("条目数上限")
-                    Spacer()
-                    TextField("", value: $model.settings.maxItems, format: .number)
-                        .frame(width: 80).multilineTextAlignment(.trailing)
-                    Text("条（0 = 不限）").foregroundStyle(.secondary)
+                    SteppedSlider(steps: SizeSteps.itemCounts,
+                                  label: SizeSteps.countLabel,
+                                  value: $model.settings.maxItems)
                 }
-                HStack {
+
+                VStack(alignment: .leading, spacing: 4) {
                     Text("单条最大")
-                    Spacer()
-                    TextField("", value: $model.settings.maxItemSizeMB, format: .number)
-                        .frame(width: 80).multilineTextAlignment(.trailing)
-                    Text("MB").foregroundStyle(.secondary)
+                    SteppedSlider(steps: SizeSteps.itemSizeMB,
+                                  label: SizeSteps.itemSizeLabel,
+                                  value: $model.settings.maxItemSizeMB)
                 }
-                Text("超出上限时从最久未使用的条目开始清理，置顶条目跳过。")
+
+                Text("超出上限时从最久未使用的条目开始清理，置顶条目跳过。改动立即保存。")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
 
