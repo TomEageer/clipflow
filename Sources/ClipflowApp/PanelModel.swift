@@ -17,8 +17,20 @@ final class PanelModel: ObservableObject {
     /// 界面缩放系数，从设置读；改了立刻反映到面板
     @Published var uiScale: Double = ClipflowSettings.load().uiScale
     @Published var developerMode: Bool = ClipflowSettings.load().developerMode
-    /// 变换菜单是否展开
-    @Published var showTransforms = false
+    /// 面板上同一时刻最多只有一个浮层。
+    ///
+    /// ⚠️ **必须用一个枚举，不能用两个 Bool。**
+    /// 两个 Bool 表示互斥状态一定会漂：实测点了「分组」再点「变换」，
+    /// 两个按钮同时高亮 —— 第二个只把自己置真，忘了清掉第一个。
+    /// 枚举从根上不可能同时为真，也不用在每个入口手写"顺手关掉另一个"。
+    enum Popup: Equatable { case none, groups, transforms }
+    @Published var popup: Popup = .none
+
+    var showTransforms: Bool { popup == .transforms }
+    var showGroups: Bool { popup == .groups }
+
+    /// 点同一个入口就收起，点另一个就换过去
+    func togglePopup(_ p: Popup) { popup = (popup == p) ? .none : p }
 
     // MARK: 分栏
 
@@ -99,7 +111,7 @@ final class PanelModel: ObservableObject {
     /// 之前是点一下直接粘出去，看不到结果就得先粘了才知道对不对。
     func pickTransform(_ t: Transformer) {
         guard let item = selectedItem else { return }
-        showTransforms = false
+        popup = .none
         setTransform(t, source: fullText(for: item), skipIfUnchanged: false)
     }
 
@@ -255,8 +267,6 @@ final class PanelModel: ObservableObject {
 
     @Published private(set) var groups: [ClipGroup] = []
     @Published private(set) var groupCounts: [Int64: Int] = [:]
-    /// 分组菜单是否展开
-    @Published var showGroups = false
     /// 正在改名的分组 id（nil = 没在改名）
     @Published var renamingGroup: Int64?
 
@@ -274,7 +284,7 @@ final class PanelModel: ObservableObject {
     func assignGroup(_ id: Int64?) {
         guard let item = selectedItem, let itemID = item.id else { return }
         try? store.setGroup(id, itemID: itemID)
-        showGroups = false
+        popup = .none
         reload()
     }
 
@@ -289,7 +299,7 @@ final class PanelModel: ObservableObject {
     func createGroupAndAssign() {
         let n = (try? store.createGroup(name: "分组 \(groups.count + 1)")) ?? nil
         reloadGroups()
-        if let n { assignGroup(n) } else { showGroups = false }
+        if let n { assignGroup(n) } else { popup = .none }
     }
 
     func renameGroup(_ id: Int64, to name: String) {
@@ -383,8 +393,7 @@ final class PanelModel: ObservableObject {
             } else {
                 selection = 0
             }
-            showTransforms = false
-            showGroups = false
+            popup = .none
             renamingGroup = nil
             refreshTransforms()
             t = perf("refreshTransforms", t)
@@ -486,8 +495,7 @@ final class PanelModel: ObservableObject {
     func select(_ i: Int, from source: SelectionSource = .mouse) {
         guard i >= 0, i < items.count, i != selection else { return }
         selection = i
-        showTransforms = false
-        showGroups = false
+        popup = .none
         namingDraft = nil
         refreshTransforms()
         if source == .keyboard { scrollToken += 1 }
@@ -516,8 +524,7 @@ final class PanelModel: ObservableObject {
         case .cancel:
             // 变换菜单开着时，esc 先关它，再按才关面板 —— 逐层退出符合直觉
             if namingDraft != nil { cancelNaming() }
-            else if showTransforms { showTransforms = false }
-            else if showGroups { showGroups = false }
+            else if popup != .none { popup = .none }
             else { onClose?() }
             return true
         case .pick(let i):
@@ -527,7 +534,7 @@ final class PanelModel: ObservableObject {
         case .delete:   deleteSelected(); return true
         case .transform:
             guard !availableTransforms.isEmpty else { return true }
-            showTransforms.toggle(); return true
+            togglePopup(.transforms); return true
         case .rename:
             beginNaming(); return true
         case .pasteTransformed:
@@ -538,10 +545,7 @@ final class PanelModel: ObservableObject {
     }
 
     /// ⌘P 现在打开分组菜单（原来是置顶）。快捷键沿用，肌肉记忆不丢。
-    private func toggleGroupMenu() {
-        showGroups.toggle()
-        showTransforms = false
-    }
+    private func toggleGroupMenu() { togglePopup(.groups) }
 
     private func deleteSelected() {
         guard let item = selectedItem, let id = item.id else { return }

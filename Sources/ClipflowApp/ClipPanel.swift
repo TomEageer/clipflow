@@ -759,7 +759,7 @@ private struct PreviewPane: View {
 
     /// 分组入口。取代原来的置顶 —— 置顶就是"只有一个、还不能改名的分组"。
     private var groupButton: some View {
-        Button { model.showGroups.toggle(); model.showTransforms = false } label: {
+        Button { model.togglePopup(.groups) } label: {
             HStack(spacing: 3) {
                 Image(systemName: model.selectedItem?.groupID == nil ? "folder" : "folder.fill")
                 Text(model.selectedGroupName ?? "分组")
@@ -779,7 +779,7 @@ private struct PreviewPane: View {
 
     /// 变换菜单入口。**变换只影响这一次粘贴，不改库里的原始内容。**
     private var transformButton: some View {
-        Button { model.showTransforms.toggle() } label: {
+        Button { model.togglePopup(.transforms) } label: {
             HStack(spacing: 3) {
                 Image(systemName: "wand.and.rays")
                 Text("变换")
