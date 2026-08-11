@@ -265,16 +265,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // 设置里改过缩放/尺寸/开发者模式的话，这次唤出就生效
         let s = ClipflowSettings.load()
         model.applySettings(s)
-        if abs(panel.frame.width - s.panelWidth) > 1 || abs(panel.frame.height - s.panelHeight) > 1 {
-            panel.setContentSize(NSSize(width: s.panelWidth, height: s.panelHeight))
-        }
         // 先记住当前前台 App，关闭时原样还回去
         let front = NSWorkspace.shared.frontmostApplication
         if front?.bundleIdentifier != Bundle.main.bundleIdentifier { previousApp = front }
 
         model.query = ""
         model.reload()
-        let anchor = panel.positionAtCursor()
+        // 尺寸和位置一起算：贴边时缩尺寸而不是翻到另一边。
+        // 保存的尺寸是**偏好值**，每次唤出都从它重新起算 —— 上次被贴边缩过不影响这次。
+        let anchor = panel.place(preferred: NSSize(width: s.panelWidth, height: s.panelHeight))
         // 面板开在鼠标左侧时，把列表挪到靠鼠标的那一边
         model.mirrored = anchor.mirrorsHorizontally
         panel.fadeIn()

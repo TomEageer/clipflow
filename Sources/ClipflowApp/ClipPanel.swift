@@ -54,50 +54,46 @@ final class ClipPanel: NSPanel {
 
     private(set) var anchor: Anchor = .right
 
-    /// 定位到鼠标旁，并算出展开方向。
+    /// 摆到鼠标旁：位置、尺寸、展开方向一次算完。
     ///
     /// **跟随鼠标的目的是让鼠标少动。**
     ///
     /// 面板默认开在鼠标右侧，列表在左半边 —— 紧挨鼠标。
-    /// 但到了屏幕右边缘，面板只能开在鼠标左侧，此时鼠标在面板的**右**边，
-    /// 而列表还在最左边，等于隔着整个预览面板，跟随就白做了。
-    /// 所以这时把**列表和预览左右对调**，让可点击的列表始终贴着鼠标那一侧。
+    /// 到了屏幕右边缘只能开在左侧，此时鼠标在面板的**右**边，
+    /// 而列表还在最左边，等于隔着整个预览面板，跟随就白做了 ——
+    /// 所以这时把列表和预览左右对调。只镜像左右，不做上下反转（列表倒序违反阅读直觉）。
     ///
-    /// 只镜像左右，不做上下反转 —— 列表倒序违反阅读直觉。
+    /// 但面板能被拉到 1000pt 以上，"右边放不下就翻过去"会让鼠标一进屏幕右半区就触发镜像，
+    /// 每次唤出布局都可能不一样。所以贴边时**优先缩尺寸**，缩不住了才翻 ——
+    /// 判据见 `PanelPlacement`，那边有测试盯着边界。
     @discardableResult
-    func positionAtCursor() -> Anchor {
+    func place(preferred: NSSize) -> Anchor {
         let mouse = NSEvent.mouseLocation
-        let size = frame.size
-        let gap: CGFloat = 8
-
         let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
         let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
 
-        // 下方放得下就往下开，否则往上
-        let fitsBelow = (mouse.y - gap - size.height) >= visible.minY
-        // 右侧放得下就往右开，否则往左
-        let fitsRight = (mouse.x + gap + size.width) <= visible.maxX
+        let r = PanelPlacement.place(mouse: mouse, preferred: preferred,
+                                     minSize: minSize, visible: visible)
+        isPlacing = true
+        setFrame(r.frame, display: false)
+        isPlacing = false
 
-        var origin = NSPoint(
-            x: fitsRight ? mouse.x + gap : mouse.x - gap - size.width,
-            y: fitsBelow ? mouse.y - gap - size.height : mouse.y + gap
-        )
-        // 兜底钳制（比如屏幕比面板还小）
-        origin.x = min(max(origin.x, visible.minX + 4), visible.maxX - size.width - 4)
-        origin.y = min(max(origin.y, visible.minY + 4), visible.maxY - size.height - 4)
-        setFrameOrigin(origin)
-
-        anchor = fitsRight ? .right : .left
+        anchor = r.mirrored ? .left : .right
         return anchor
     }
 
     /// 记住用户拉过的尺寸。下次唤出保持一致，不然每次都要重拉一遍。
     var onResize: ((NSSize) -> Void)?
 
+    /// ⚠️ 程序化摆放期间**绝不能回存尺寸**。
+    /// 贴边自适应缩小是"这一次显示"的决定，存下来的话面板会一次比一次小，
+    /// 用户辛辛苦苦拉出来的尺寸就这么悄悄丢了。
+    private var isPlacing = false
+
     override func setFrame(_ frameRect: NSRect, display flag: Bool) {
         let changed = frameRect.size != frame.size
         super.setFrame(frameRect, display: flag)
-        if changed, isVisible { onResize?(frameRect.size) }
+        if changed, isVisible, !isPlacing { onResize?(frameRect.size) }
     }
 
     /// 淡入。130ms —— 快到不觉得在等，又不会"啪"地跳出来。

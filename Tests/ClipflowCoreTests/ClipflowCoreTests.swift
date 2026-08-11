@@ -1394,3 +1394,100 @@ struct SplitLayoutTests {
         #expect(abs((back ?? 0) - ratio) < 0.001)
     }
 }
+
+// MARK: - 面板摆放
+
+@Suite("面板贴边摆放")
+struct PanelPlacementTests {
+
+    private let screen = CGRect(x: 0, y: 0, width: 1800, height: 1100)
+    private let want = CGSize(width: 1000, height: 700)
+    private let minSize = CGSize(width: 520, height: 320)
+
+    private func place(_ x: CGFloat, _ y: CGFloat,
+                       preferred: CGSize? = nil,
+                       screen s: CGRect? = nil) -> PanelPlacement.Result {
+        PanelPlacement.place(mouse: CGPoint(x: x, y: y),
+                             preferred: preferred ?? want,
+                             minSize: minSize,
+                             visible: s ?? screen)
+    }
+
+    @Test("空间充足：原尺寸、开右下、不镜像")
+    func roomy() {
+        let r = place(200, 900)
+        #expect(r.frame.size == want)
+        #expect(!r.mirrored)
+        #expect(r.frame.minX > 200)          // 在鼠标右边
+        #expect(r.frame.maxY < 900)          // 在鼠标下边
+    }
+
+    /// 这条是这次改动的核心诉求：
+    /// 右边放不下完整宽度，但还够摆一个像样的面板 —— 缩宽度，**不要翻到另一边**。
+    @Test("贴右边但空间还够：缩宽度而不镜像")
+    func shrinkInsteadOfMirror() {
+        let r = place(1000, 900)             // 右侧剩 1800-1000-8 = 792 < 1000
+        #expect(!r.mirrored, "空间还够 792pt 就翻到另一边了 —— 布局会左右对调，很打断人")
+        #expect(r.frame.width == 792)
+        #expect(r.frame.maxX <= screen.maxX)
+    }
+
+    /// 缩到偏好宽度 60% 以下就不值得再缩，宁可翻过去保持完整
+    @Test("太贴右边：翻到左侧并保持完整宽度")
+    func mirrorWhenTooTight() {
+        let r = place(1500, 900)             // 右侧只剩 292，低于 max(520, 600)
+        #expect(r.mirrored)
+        #expect(r.frame.width == want.width)
+        #expect(r.frame.maxX <= 1500)        // 整个面板在鼠标左边
+    }
+
+    @Test("纵向同样先缩高度再往上开")
+    func shrinkHeight() {
+        let r = place(200, 600)              // 下方剩 592 < 700，但 > max(320, 420)
+        #expect(r.frame.height == 592)
+        #expect(r.frame.minY >= 0)
+    }
+
+    @Test("太贴底部：改为向上展开并保持完整高度")
+    func flipUp() {
+        let r = place(200, 300)              // 下方只剩 292
+        #expect(r.frame.height == want.height)
+        #expect(r.frame.minY >= 300)         // 在鼠标上方
+    }
+
+    /// 屏幕比面板还小时不能溢出 —— 这是最容易漏的一档
+    @Test("屏幕比面板小：钳进屏幕内")
+    func tinyScreen() {
+        let small = CGRect(x: 0, y: 0, width: 700, height: 500)
+        for x in stride(from: 0.0, through: 700.0, by: 100.0) {
+            for y in stride(from: 0.0, through: 500.0, by: 100.0) {
+                let r = place(x, y, screen: small)
+                #expect(small.contains(r.frame), "鼠标 (\(x),\(y)) 时面板跑出屏幕：\(r.frame)")
+            }
+        }
+    }
+
+    /// 非原点屏幕（外接显示器常见负坐标）也必须落在可见区内
+    @Test("外接屏负坐标下也不跑出去")
+    func offsetScreen() {
+        let ext = CGRect(x: -393, y: -1440, width: 2560, height: 1440)
+        for x in stride(from: -393.0, through: 2167.0, by: 320.0) {
+            for y in stride(from: -1440.0, through: 0.0, by: 240.0) {
+                let r = place(x, y, screen: ext)
+                #expect(ext.contains(r.frame), "鼠标 (\(x),\(y)) 时面板跑出屏幕：\(r.frame)")
+            }
+        }
+    }
+
+    /// 尺寸永远不该小于下限（除非屏幕本身就更小）
+    @Test("任何位置都不小于最小尺寸")
+    func neverBelowMin() {
+        for x in stride(from: 0.0, through: 1800.0, by: 150.0) {
+            for y in stride(from: 0.0, through: 1100.0, by: 150.0) {
+                let r = place(x, y)
+                #expect(r.frame.width >= minSize.width, "鼠标 x=\(x) 时宽度 \(r.frame.width)")
+                #expect(r.frame.height >= minSize.height, "鼠标 y=\(y) 时高度 \(r.frame.height)")
+            }
+        }
+    }
+}
