@@ -277,19 +277,18 @@ final class PanelModel: ObservableObject {
         reload()
     }
 
-    /// 只建分组、不放东西（分类条上的 + 按钮）
+    /// 只建分组、不放东西（分类条上的 + 按钮）。
+    /// **不自动进改名态** —— 自动弹输入框会让胶囊看起来是另一种控件，
+    /// 而且一旦没有"失焦即退出"的出路就会永久卡住（实测发生过）。改名走双击。
     func createGroup() {
-        let n = (try? store.createGroup(name: "分组 \(groups.count + 1)")) ?? nil
+        _ = (try? store.createGroup(name: "分组 \(groups.count + 1)")) ?? nil
         reloadGroups()
-        renamingGroup = n
     }
 
     func createGroupAndAssign() {
         let n = (try? store.createGroup(name: "分组 \(groups.count + 1)")) ?? nil
         reloadGroups()
         if let n { assignGroup(n) } else { showGroups = false }
-        // 新建完直接进改名态 —— 没人想留着「分组 3」这个名字
-        renamingGroup = n
     }
 
     func renameGroup(_ id: Int64, to name: String) {
@@ -367,6 +366,7 @@ final class PanelModel: ObservableObject {
             }
             showTransforms = false
             showGroups = false
+            renamingGroup = nil
             refreshTransforms()
             if thumbCache.count > 300 { thumbCache.removeAll(keepingCapacity: true) }
             if largeCache.count > 12 { largeCache.removeAll(keepingCapacity: true) }

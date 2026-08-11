@@ -712,11 +712,13 @@ private struct PreviewPane: View {
         HStack(spacing: 5) {
             if model.namingDraft != nil {
                 Image(systemName: "tag").font(t.font(9))
-                NameField(text: Binding(get: { model.namingDraft ?? "" },
-                                        set: { model.namingDraft = $0 }),
-                          fontSize: t.size(11),
-                          onCommit: { model.commitName() },
-                          onCancel: { model.cancelNaming() })
+                InlineTextField(text: Binding(get: { model.namingDraft ?? "" },
+                                              set: { model.namingDraft = $0 }),
+                                placeholder: "给这条起个名字…",
+                                fontSize: t.size(11),
+                                onCommit: { model.commitName() },
+                                onCancel: { model.cancelNaming() })
+                    .frame(height: t.size(19))
                 Text("⏎ 保存").font(t.font(9)).foregroundStyle(.tertiary)
             } else if let n = item.name, !n.isEmpty {
                 Image(systemName: "tag.fill").font(t.font(9))
@@ -1047,59 +1049,3 @@ private struct SearchField: NSViewRepresentable {
 
 enum KeyAction { case up, down, confirm, cancel, pick(Int), delete, pin, transform, pasteTransformed, rename }
 
-// MARK: 命名输入框
-
-/// 命名用的小输入框。
-///
-/// 和搜索框一样必须走 `control(_:textView:doCommandBy:)` —— NSTextField 获得焦点时
-/// 真正的 first responder 是它的 field editor，`keyDown` override 根本收不到
-/// （Esc 关不掉面板那次就是这么来的）。
-private struct NameField: NSViewRepresentable {
-    @Binding var text: String
-    var fontSize: CGFloat
-    var onCommit: () -> Void
-    var onCancel: () -> Void
-
-    func makeNSView(context: Context) -> NSTextField {
-        let tf = NSTextField()
-        tf.placeholderString = "给这条起个名字…"
-        tf.isBordered = false
-        tf.drawsBackground = true
-        tf.backgroundColor = .textBackgroundColor
-        tf.focusRingType = .none
-        tf.font = .systemFont(ofSize: fontSize)
-        tf.delegate = context.coordinator
-        tf.stringValue = text
-        DispatchQueue.main.async { tf.window?.makeFirstResponder(tf) }
-        return tf
-    }
-
-    func updateNSView(_ v: NSTextField, context: Context) {
-        context.coordinator.parent = self
-        if v.stringValue != text { v.stringValue = text }
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
-
-    final class Coordinator: NSObject, NSTextFieldDelegate {
-        var parent: NameField
-        init(_ p: NameField) { parent = p }
-
-        func controlTextDidChange(_ obj: Notification) {
-            guard let tf = obj.object as? NSTextField else { return }
-            parent.text = tf.stringValue
-        }
-
-        func control(_ control: NSControl, textView: NSTextView,
-                     doCommandBy selector: Selector) -> Bool {
-            switch selector {
-            case #selector(NSResponder.insertNewline(_:)):
-                parent.onCommit(); return true
-            case #selector(NSResponder.cancelOperation(_:)):
-                parent.onCancel(); return true
-            default:
-                return false
-            }
-        }
-    }
-}
