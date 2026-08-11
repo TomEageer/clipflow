@@ -62,6 +62,11 @@ public struct ClipflowSettings: Codable, Sendable, Equatable {
     public var panelWidth: Double = 720
     public var panelHeight: Double = 480
 
+    /// 列表占面板宽度的比例，剩下的给预览。拖分隔条时更新。
+    /// 存**比例**而不是像素宽度：面板本身可自由拉伸，存死宽度的话
+    /// 把窗口拉宽后所有增量都会压给预览，列表永远保持原样。
+    public var splitRatio: Double = 0.53
+
     /// 界面缩放。默认 1.0；小屏或视力需要时调大，所有字号与间距按比例走。
     public var uiScale: Double = 1.0
 

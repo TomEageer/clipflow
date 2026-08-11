@@ -1289,10 +1289,108 @@ struct TransformTests {
         #expect(list.allSatisfy { !$0.developerOnly })
     }
 
+    /// JSON 格式化/压缩**不归开发者开关管**。
+    ///
+    /// 它们的 canApply 要求内容真是合法 JSON，对普通用户天然隐形，
+    /// 再藏一层开关只会让人以为功能没做 —— 实际发生过。
+    @Test("JSON 格式化不需要开发者模式")
+    func jsonAvailableWithoutDeveloperMode() {
+        let list = reg.applicable(to: #"{"a":1,"b":[2,3]}"#, developerMode: false)
+        #expect(list.contains { $0.id == "json.pretty" }, "普通模式下 JSON 格式化必须可用")
+        #expect(list.contains { $0.id == "json.minify" })
+
+        // 但普通文本不能被它污染
+        let plain = reg.applicable(to: "今天天气不错", developerMode: false)
+        #expect(!plain.contains { $0.group == .json })
+    }
+
     @Test("去空行只在真有连续空行时提供")
     func trimGating() {
         let t = TrimBlankLinesTransformer()
         #expect(!t.canApply(to: "a\n\nb"))
         #expect(t.canApply(to: "a\n\n\n\nb"))
+    }
+}
+
+// MARK: - 面板分栏
+
+@Suite("左右分栏宽度")
+struct SplitLayoutTests {
+
+    private let minList = 300.0
+    private let minPreview = 220.0
+    private let splitter = 7.0
+
+    private func w(total: Double, ratio: Double) -> Double {
+        SplitLayout.listWidth(total: total, ratio: ratio,
+                              minList: minList, minPreview: minPreview, splitter: splitter)
+    }
+
+    /// 核心诉求：窗口拉宽，两栏都要跟着变宽。
+    /// 之前列表写死 380pt，拉窗口只有预览在变 —— 这条就是为了防它回来。
+    @Test("面板变宽时两栏按比例同时变宽")
+    func bothColumnsGrow() {
+        let narrow = w(total: 720, ratio: 0.5)
+        let wide   = w(total: 1200, ratio: 0.5)
+        #expect(wide > narrow, "面板拉宽后列表没变宽 —— 布局又被写死了")
+
+        let narrowPreview = 720 - splitter - narrow
+        let widePreview   = 1200 - splitter - wide
+        #expect(widePreview > narrowPreview)
+    }
+
+    @Test("比例正常时按比例给宽度")
+    func honoursRatio() {
+        let total = 1000.0
+        #expect(abs(w(total: total, ratio: 0.6) - (total - splitter) * 0.6) < 0.001)
+    }
+
+    /// 拖到头不能把任何一栏压没 —— 归零的那栏用户再也拖不回来
+    @Test("两侧下限都夹得住")
+    func clampsBothSides() {
+        let total = 900.0
+        let usable = total - splitter
+        #expect(w(total: total, ratio: 0.01) == minList)
+        #expect(w(total: total, ratio: 0.99) == usable - minPreview)
+    }
+
+    /// 面板被拉到比两栏下限之和还窄：对半分，不让某一栏归零
+    @Test("窄于两栏下限之和时对半分")
+    func tooNarrowFallsBackToHalf() {
+        let total = 400.0   // 400 - 7 = 393 < 300 + 220
+        #expect(abs(w(total: total, ratio: 0.9) - (total - splitter) / 2) < 0.001)
+        #expect(w(total: total, ratio: 0.9) > 0)
+    }
+
+    @Test("拖动换算回比例，同样受下限约束")
+    func dragRatioClamped() {
+        let total = 900.0
+        let usable = total - splitter
+        let low = SplitLayout.ratio(forListWidth: 10, total: total,
+                                    minList: minList, minPreview: minPreview, splitter: splitter)
+        #expect(abs((low ?? 0) - minList / usable) < 0.001)
+
+        let high = SplitLayout.ratio(forListWidth: 5000, total: total,
+                                     minList: minList, minPreview: minPreview, splitter: splitter)
+        #expect(abs((high ?? 0) - (usable - minPreview) / usable) < 0.001)
+    }
+
+    /// 太窄时拖动无意义，返回 nil 而不是一个会把预览压没的比例
+    @Test("面板过窄时拖动不生效")
+    func dragDisabledWhenTooNarrow() {
+        #expect(SplitLayout.ratio(forListWidth: 300, total: 400,
+                                  minList: minList, minPreview: minPreview,
+                                  splitter: splitter) == nil)
+    }
+
+    /// 存进设置的比例往返一趟要稳定，不能每次唤出都漂一点
+    @Test("比例往返稳定")
+    func roundTripStable() {
+        let total = 1000.0
+        let ratio = 0.42
+        let width = w(total: total, ratio: ratio)
+        let back = SplitLayout.ratio(forListWidth: width, total: total,
+                                     minList: minList, minPreview: minPreview, splitter: splitter)
+        #expect(abs((back ?? 0) - ratio) < 0.001)
     }
 }

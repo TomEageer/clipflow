@@ -17,8 +17,12 @@ struct Theme {
     var rowThumbHeight: CGFloat { 26 * scale }
     var rowThumbWidth: CGFloat { 34 * scale }
     var iconColumn: CGFloat { 34 * scale }
-    var listWidth: CGFloat { 380 * scale }
-    var previewWidth: CGFloat { 320 * scale }
+    /// 两列的**下限**，不是固定宽度 —— 宽度由分隔条比例算出来，见 PanelModel.listWidth。
+    /// 低于这个值列表会挤成一坨、预览会变成一条缝，都失去意义。
+    var minListWidth: CGFloat { 300 * scale }
+    var minPreviewWidth: CGFloat { 220 * scale }
+    /// 分隔条命中区。视觉上只有 1pt 的线，但 1pt 的拖拽热区根本抓不住。
+    var splitterWidth: CGFloat { 7 }
 
     static let steps: [Double] = [0.85, 1.0, 1.15, 1.3, 1.5]
     static func label(_ s: Double) -> String {

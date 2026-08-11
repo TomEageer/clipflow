@@ -49,11 +49,13 @@ public struct LowercaseTransformer: Transformer {
 
 // MARK: - JSON
 
+/// **不归开发者模式管。** `canApply` 要求内容真是一段合法 JSON，
+/// 对普通用户天然隐形；藏在开关后面只会让人以为没做（真发生过）。
 public struct JSONPrettyTransformer: Transformer {
     public let id = "json.pretty"
     public let title = "JSON 格式化"
     public let group = TransformGroup.json
-    public let developerOnly = true
+    public let developerOnly = false
     public init() {}
     public func canApply(to text: String) -> Bool { JSONDetector.looksLikeJSON(text) }
     public func apply(to text: String) throws -> String {
@@ -62,11 +64,12 @@ public struct JSONPrettyTransformer: Transformer {
     }
 }
 
+/// 同上，也是自带内容判定的安全变换。
 public struct JSONMinifyTransformer: Transformer {
     public let id = "json.minify"
     public let title = "JSON 压缩"
     public let group = TransformGroup.json
-    public let developerOnly = true
+    public let developerOnly = false
     public init() {}
     public func canApply(to text: String) -> Bool { JSONDetector.looksLikeJSON(text) }
     public func apply(to text: String) throws -> String {

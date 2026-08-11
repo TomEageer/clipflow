@@ -297,15 +297,28 @@ private struct GeneralTab: View {
                         }.controlSize(.small)
                     }
                 }
-                Text("面板可直接用鼠标拖边框调整大小，会自动记住。界面大小改动在下次唤出面板时生效。")
+                LabeledContent("列表与预览") {
+                    HStack(spacing: 6) {
+                        Text("\(Int((model.settings.splitRatio * 100).rounded())) : "
+                             + "\(Int(((1 - model.settings.splitRatio) * 100).rounded()))")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        Button("恢复默认") { model.settings.splitRatio = 0.53 }
+                            .controlSize(.small)
+                    }
+                }
+                Text("面板可直接用鼠标拖边框调整大小，中间的分隔条可左右拖动改变两栏比例，都会自动记住。"
+                     + "界面大小改动在下次唤出面板时生效。")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
 
             Section("开发者模式") {
                 Toggle("启用开发者功能", isOn: $model.settings.developerMode)
-                Text("开启后：自动识别 JSON 并在预览里格式化显示；"
-                     + "选中条目按 ⌘T 可选择粘贴变换（JSON 格式化 / 压缩 / 转义 / 反转义、"
-                     + "URL 编解码、Base64 编解码）。变换只影响这一次粘贴，不改动库里的原始内容。")
+                Text("JSON 识别与「JSON 格式化 / 压缩」变换不需要开这个开关 —— "
+                     + "复制到合法 JSON 时，预览右上角会直接出现「格式化」按钮。"
+                     + "这里开启的是：默认就以格式化形式展示 JSON，以及额外的变换项"
+                     + "（JSON 转义 / 反转义、URL 编解码、Base64 编解码）。"
+                     + "所有变换只影响这一次粘贴，不改动库里的原始内容。")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
 

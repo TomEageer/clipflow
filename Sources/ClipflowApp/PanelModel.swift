@@ -19,20 +19,70 @@ final class PanelModel: ObservableObject {
     /// 变换菜单是否展开
     @Published var showTransforms = false
 
+    // MARK: 分栏
+
+    /// 列表占面板宽度的比例。存比例而非像素：面板本身可自由拉伸，
+    /// 存死宽度的话把窗口拉宽后增量全压给预览，列表永远是原来那么宽。
+    @Published private(set) var splitRatio: Double = ClipflowSettings.load().splitRatio
+
+    /// 由比例算出列表实际宽度。**夹紧规则在 Core 的 SplitLayout 里，有测试守着。**
+    func listWidth(total: CGFloat, theme t: Theme) -> CGFloat {
+        CGFloat(SplitLayout.listWidth(total: Double(total),
+                                      ratio: splitRatio,
+                                      minList: Double(t.minListWidth),
+                                      minPreview: Double(t.minPreviewWidth),
+                                      splitter: Double(t.splitterWidth)))
+    }
+
+    /// 拖分隔条。`width` 是拖到的目标列表宽度（镜像时调用方已翻好符号）。
+    func setListWidth(_ width: CGFloat, total: CGFloat, theme t: Theme) {
+        guard let r = SplitLayout.ratio(forListWidth: Double(width),
+                                        total: Double(total),
+                                        minList: Double(t.minListWidth),
+                                        minPreview: Double(t.minPreviewWidth),
+                                        splitter: Double(t.splitterWidth)) else { return }
+        splitRatio = r
+    }
+
+    /// 松手才写盘。拖动过程中每帧存一次 UserDefaults 纯属浪费。
+    func persistSplit() {
+        var s = ClipflowSettings.load()
+        s.splitRatio = splitRatio
+        s.save()
+    }
+
     let transformers = TransformerRegistry.standard()
 
     /// 选中条目可用的变换。不适用的不显示 —— 列一堆点了没反应的动作最恼人。
-    var availableTransforms: [Transformer] {
-        guard let item = selectedItem else { return [] }
+    ///
+    /// ⚠️ **必须缓存，不能写成 computed property。**
+    /// 判定要跑 `JSONDetector.looksLikeJSON`（真解析一遍）和一串字符串扫描，
+    /// 而 footer 和预览头每次 body 求值都会读它 —— 之前那版等于每帧解析一次 JSON。
+    /// 改成随选中项变化时算一次。
+    @Published private(set) var availableTransforms: [Transformer] = []
+
+    /// 选中项是不是一段合法 JSON。预览头的徽章与「格式化」开关据此显示。
+    @Published private(set) var selectedIsJSON = false
+    /// 预览是否以格式化形式展示 JSON。开发者模式下默认开（省一次点击），
+    /// 但**任何人都能点头部那个开关切回原文** —— 不再是藏在设置里的隐形功能。
+    @Published var prettyJSON: Bool = ClipflowSettings.load().developerMode
+
+    private func refreshTransforms() {
+        guard let item = selectedItem else {
+            availableTransforms = []; selectedIsJSON = false; return
+        }
         let text = fullText(for: item)
-        guard !text.isEmpty, text.count < 500_000 else { return [] }
-        return transformers.applicable(to: text, developerMode: developerMode)
+        guard !text.isEmpty, text.count < 500_000 else {
+            availableTransforms = []; selectedIsJSON = false; return
+        }
+        availableTransforms = transformers.applicable(to: text, developerMode: developerMode)
+        selectedIsJSON = JSONDetector.looksLikeJSON(text)
     }
 
-    /// 开发者模式下，JSON 自动格式化后展示。识别失败就原样返回。
+    /// 预览正文。识别为 JSON 且开着格式化时给格式化版本。
     func displayText(for item: ClipItem) -> (text: String, isFormattedJSON: Bool) {
         let raw = fullText(for: item)
-        guard developerMode, JSONDetector.looksLikeJSON(raw),
+        guard prettyJSON, selectedIsJSON,
               let pretty = JSONDetector.pretty(raw), pretty != raw else {
             return (raw, false)
         }
@@ -120,6 +170,7 @@ final class PanelModel: ObservableObject {
                 selection = 0
             }
             showTransforms = false
+            refreshTransforms()
             if thumbCache.count > 300 { thumbCache.removeAll(keepingCapacity: true) }
             if largeCache.count > 12 { largeCache.removeAll(keepingCapacity: true) }
             if textCache.count > 200 { textCache.removeAll(keepingCapacity: true) }
@@ -198,7 +249,20 @@ final class PanelModel: ObservableObject {
     func select(_ i: Int, from source: SelectionSource = .mouse) {
         guard i >= 0, i < items.count, i != selection else { return }
         selection = i
+        showTransforms = false
+        refreshTransforms()
         if source == .keyboard { scrollToken += 1 }
+    }
+
+    /// 设置窗口改过的东西，下次唤出面板时生效。
+    func applySettings(_ s: ClipflowSettings) {
+        uiScale = s.uiScale
+        if developerMode != s.developerMode {
+            developerMode = s.developerMode
+            prettyJSON = s.developerMode
+            refreshTransforms()
+        }
+        splitRatio = s.splitRatio
     }
 
     func handleKey(_ action: KeyAction) -> Bool {

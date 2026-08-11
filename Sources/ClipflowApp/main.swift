@@ -262,9 +262,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func showPanel() {
-        // 设置里改过缩放/尺寸的话，这次唤出就生效
+        // 设置里改过缩放/尺寸/开发者模式的话，这次唤出就生效
         let s = ClipflowSettings.load()
-        model.uiScale = s.uiScale
+        model.applySettings(s)
         if abs(panel.frame.width - s.panelWidth) > 1 || abs(panel.frame.height - s.panelHeight) > 1 {
             panel.setContentSize(NSSize(width: s.panelWidth, height: s.panelHeight))
         }

@@ -182,19 +182,28 @@ struct ClipListView: View {
     /// 面板开在鼠标左侧时为 true：列表与预览左右对调，让列表贴着鼠标。
     private var mirrored: Bool { model.mirrored }
 
+    /// 拖动开始时的列表宽度。DragGesture 的 translation 是**从按下那刻起的累计位移**，
+    /// 不是每帧增量，所以必须记住基准值再加，否则会指数级跑飞。
+    @State private var dragBase: CGFloat?
+
     var body: some View {
-        HStack(spacing: 0) {
-            if mirrored {
-                PreviewPane(model: model).frame(width: t.previewWidth)
-                Divider().opacity(0.5)
-            }
+        GeometryReader { geo in
+            let total = geo.size.width
+            let listW = model.listWidth(total: total, theme: t)
+            let previewW = max(0, total - listW - t.splitterWidth)
 
-            listColumn
-
-            if !mirrored {
-                Divider().opacity(0.5)
-                PreviewPane(model: model).frame(width: t.previewWidth)
+            HStack(spacing: 0) {
+                if mirrored {
+                    PreviewPane(model: model, theme: t).frame(width: previewW)
+                    splitter(total: total, listW: listW)
+                    listColumn.frame(width: listW)
+                } else {
+                    listColumn.frame(width: listW)
+                    splitter(total: total, listW: listW)
+                    PreviewPane(model: model, theme: t).frame(width: previewW)
+                }
             }
+            .frame(width: total, height: geo.size.height)
         }
         .frame(minWidth: 520, maxWidth: .infinity, minHeight: 320, maxHeight: .infinity)
         .background(.regularMaterial)
@@ -203,6 +212,29 @@ struct ClipListView: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.primary.opacity(0.08)))
+    }
+
+    /// 可拖动的分隔条。
+    ///
+    /// 视觉上仍是 1pt 的细线，但**命中区要宽出去**（7pt）——
+    /// 1pt 的拖拽热区实际上抓不住，鼠标会一直从旁边滑过去。
+    private func splitter(total: CGFloat, listW: CGFloat) -> some View {
+        ZStack {
+            Rectangle().fill(Color.primary.opacity(0.04))
+            Rectangle().fill(Color.primary.opacity(0.12)).frame(width: 1)
+            SplitterHandle(
+                onDrag: { dx in
+                    let base = dragBase ?? listW
+                    if dragBase == nil { dragBase = base }
+                    // 镜像时列表在右半边，往右拖是把列表压窄，符号相反
+                    model.setListWidth(base + (mirrored ? -dx : dx), total: total, theme: t)
+                },
+                onEnd: {
+                    dragBase = nil
+                    model.persistSplit()   // 松手才写盘，拖动过程中每帧存一次纯属浪费
+                })
+        }
+        .frame(width: t.splitterWidth)
     }
 
     private var listColumn: some View {
@@ -253,7 +285,6 @@ struct ClipListView: View {
                 Spacer(minLength: 0)
                 footer
             }
-            .frame(width: 380)
     }
 
     /// 分类切换。用原生分段控件，点击切换，不自动跳。
@@ -345,10 +376,75 @@ private struct KeyHint: View {
     }
 }
 
+// MARK: 分隔条手柄
+
+/// 分隔条的拖拽手柄。**必须用 AppKit 视图实现，不能用纯 SwiftUI 的 DragGesture。**
+///
+/// 面板开着 `isMovableByWindowBackground`（它没有标题栏，拖背景是唯一能挪窗口的方式），
+/// 而窗口背景拖拽在 AppKit 层就把鼠标事件截走了，**排在 SwiftUI 手势之前**。
+/// 实测：拖分隔条时整个面板跟着鼠标跑了 135pt，分栏比例一点没变。
+///
+/// `mouseDownCanMoveWindow` 是 AppKit 里唯一的退出开关，SwiftUI 没有对应修饰符 ——
+/// 所以这一小块必须落到 NSView 上。光标形状也顺手在这里给了，
+/// 用 tracking area 而不是 `.onHover` + `NSCursor.push/pop`：后者要求 push/pop 严格配对，
+/// 面板在悬停状态下直接关掉时收不到 exit 回调，光标会卡在左右箭头上下不来。
+private struct SplitterHandle: NSViewRepresentable {
+    /// 相对按下点的**累计**位移（与 DragGesture.translation 同语义）
+    var onDrag: (CGFloat) -> Void
+    var onEnd: () -> Void
+
+    func makeNSView(context: Context) -> HandleView {
+        let v = HandleView()
+        v.onDrag = onDrag
+        v.onEnd = onEnd
+        return v
+    }
+
+    func updateNSView(_ v: HandleView, context: Context) {
+        v.onDrag = onDrag
+        v.onEnd = onEnd
+    }
+
+    final class HandleView: NSView {
+        var onDrag: ((CGFloat) -> Void)?
+        var onEnd: (() -> Void)?
+        private var startX: CGFloat = 0
+
+        override var mouseDownCanMoveWindow: Bool { false }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            trackingAreas.forEach(removeTrackingArea)
+            addTrackingArea(NSTrackingArea(
+                rect: .zero,
+                options: [.activeAlways, .cursorUpdate, .inVisibleRect],
+                owner: self))
+        }
+
+        override func cursorUpdate(with event: NSEvent) {
+            NSCursor.resizeLeftRight.set()
+        }
+
+        override func mouseDown(with event: NSEvent) {
+            startX = event.locationInWindow.x
+        }
+
+        override func mouseDragged(with event: NSEvent) {
+            onDrag?(event.locationInWindow.x - startX)
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            onEnd?()
+        }
+    }
+}
+
 // MARK: 预览
 
 private struct PreviewPane: View {
     @ObservedObject var model: PanelModel
+    let theme: Theme
+    private var t: Theme { theme }
 
     var body: some View {
         Group {
@@ -356,18 +452,23 @@ private struct PreviewPane: View {
                 VStack(alignment: .leading, spacing: 0) {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 5) {
-                            if item.pinned { Image(systemName: "pin.fill").font(.system(size: 9)) }
+                            if item.pinned { Image(systemName: "pin.fill").font(t.font(9)) }
                             if item.sensitivity == .sensitive {
                                 Label("敏感", systemImage: "lock.fill")
-                                    .font(.system(size: 10)).foregroundStyle(.orange)
+                                    .font(t.font(10)).foregroundStyle(.orange)
                             }
                             Text(item.kind.label)
                             Text("·")
-                            Text(item.sourceAppName ?? "未知来源")
+                            Text(item.sourceAppName ?? "未知来源").lineLimit(1)
+                            Spacer(minLength: 6)
+                            // 动作入口放这里而不是只留快捷键 ——
+                            // 变换功能之前只能靠 ⌘T 触发，等于没人知道它存在。
+                            if model.selectedIsJSON { jsonToggle }
+                            if !model.availableTransforms.isEmpty { transformButton }
                         }
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                        .font(t.font(10)).foregroundStyle(.secondary)
                         Text(item.createdAt.formatted(date: .abbreviated, time: .standard))
-                            .font(.system(size: 10)).foregroundStyle(.tertiary)
+                            .font(t.font(10)).foregroundStyle(.tertiary)
                     }
                     .padding(.horizontal, 12).padding(.top, 11).padding(.bottom, 8)
 
@@ -383,9 +484,9 @@ private struct PreviewPane: View {
                                 if let ocr = model.ocrText(for: item) {
                                     VStack(alignment: .leading, spacing: 3) {
                                         Label("图中文字", systemImage: "text.viewfinder")
-                                            .font(.system(size: 10)).foregroundStyle(.secondary)
+                                            .font(t.font(10)).foregroundStyle(.secondary)
                                         Text(ocr)
-                                            .font(.system(size: 10))
+                                            .font(t.font(10))
                                             .textSelection(.enabled)
                                             .frame(maxWidth: .infinity, alignment: .leading)
                                     }
@@ -394,38 +495,65 @@ private struct PreviewPane: View {
                             .padding(10)
                         } else {
                             let shown = model.displayText(for: item)
-                            VStack(alignment: .leading, spacing: 6) {
-                                if shown.isFormattedJSON {
-                                    Label("已识别为 JSON，自动格式化显示",
-                                          systemImage: "curlybraces")
-                                        .font(.system(size: 10))
-                                        .foregroundStyle(.secondary)
-                                }
-                                Text(shown.text)
-                                    .font(.system(size: 11,
-                                                  design: (shown.isFormattedJSON || item.kind == .code)
-                                                          ? .monospaced : .default))
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            .padding(12)
+                            Text(shown.text)
+                                .font(t.font(11,
+                                              design: (shown.isFormattedJSON || item.kind == .code)
+                                                      ? .monospaced : .default))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(12)
                         }
                     }
+                    .frame(maxHeight: .infinity)
 
                     Divider().opacity(0.4)
                     Text(model.formatSummary(for: item))
-                        .font(.system(size: 9, design: .monospaced))
+                        .font(t.font(9, design: .monospaced))
                         .foregroundStyle(.tertiary)
                         .lineLimit(2)
                         .padding(.horizontal, 12).padding(.vertical, 7)
                 }
             } else {
                 VStack { Spacer()
-                    Text("选中一条查看").font(.system(size: 11)).foregroundStyle(.tertiary)
+                    Text("选中一条查看").font(t.font(11)).foregroundStyle(.tertiary)
                     Spacer() }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// JSON 徽章兼开关。识别为 JSON 时才出现，点一下在「格式化 / 原文」之间切。
+    /// 之前这个能力藏在设置里的开发者开关后面，等于没做。
+    private var jsonToggle: some View {
+        Button { model.prettyJSON.toggle() } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "curlybraces")
+                Text(model.prettyJSON ? "原文" : "格式化")
+            }
+            .font(t.font(10))
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(Capsule().fill(.primary.opacity(0.08)))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(model.prettyJSON ? "显示复制时的原始文本" : "已识别为 JSON，点击格式化显示")
+    }
+
+    /// 变换菜单入口。**变换只影响这一次粘贴，不改库里的原始内容。**
+    private var transformButton: some View {
+        Button { model.showTransforms.toggle() } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "wand.and.rays")
+                Text("变换")
+                Text("⌘T").foregroundStyle(.tertiary)
+            }
+            .font(t.font(10))
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(Capsule().fill(.primary.opacity(0.08)))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help("换一种格式粘贴出去，原始内容不变")
     }
 }
 
