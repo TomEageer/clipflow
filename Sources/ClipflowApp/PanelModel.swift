@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 import SwiftUI
 import ClipflowCore
 import ClipflowCapture
@@ -338,7 +339,21 @@ final class PanelModel: ObservableObject {
         }
     }
 
+    /// 临时性能探针：`CLIPFLOW_PERF=1` 时把 reload 各阶段耗时打到 stdout。
+    /// 「点分组感觉卡」这种问题不能靠猜，得先量出来是哪一段。
+    static let perfEnabled = ProcessInfo.processInfo.environment["CLIPFLOW_PERF"] == "1"
+    private func perf(_ label: String, _ t0: CFAbsoluteTime) -> CFAbsoluteTime {
+        let now = CFAbsoluteTimeGetCurrent()
+        if Self.perfEnabled {
+            // 走 stderr：stdout 重定向到文件后是全缓冲，日志会全丢（docs/05 §5.2 记过）
+            fputs(String(format: "[perf] %-16@ %6.2fms\n", label as NSString, (now - t0) * 1000), stderr)
+        }
+        return now
+    }
+
     func reload() {
+        let tStart = CFAbsoluteTimeGetCurrent()
+        var t = tStart
         do {
             let q = query.trimmingCharacters(in: .whitespaces)
             // 记住当前选中的条目 id，刷新后尽量停在原处 —— 后台捕获到新内容时
@@ -356,9 +371,13 @@ final class PanelModel: ObservableObject {
                 items = filtered
                 if items.count > 200 { items = Array(items.prefix(200)) }
             }
+            t = perf("recent/search", t)
             counts = (try? store.countsByKind()) ?? [:]
+            t = perf("countsByKind", t)
             reloadGroups()
+            t = perf("reloadGroups", t)
             total = try store.count()
+            t = perf("count", t)
             if let keepID, let idx = items.firstIndex(where: { $0.id == keepID }) {
                 selection = idx
             } else {
@@ -368,6 +387,19 @@ final class PanelModel: ObservableObject {
             showGroups = false
             renamingGroup = nil
             refreshTransforms()
+            t = perf("refreshTransforms", t)
+            _ = perf("== reload 合计", tStart)
+            // 从 reload 返回到这一帧真正上屏的时间。数据层只要 1ms 而用户觉得卡时，
+            // 差额就全在这里（SwiftUI 求值 + 布局 + 动画）。
+            if Self.perfEnabled {
+                let tFrame = CFAbsoluteTimeGetCurrent()
+                CATransaction.begin()
+                CATransaction.setCompletionBlock {
+                    fputs(String(format: "[perf] >> 上屏耗时      %6.2fms\n",
+                                 (CFAbsoluteTimeGetCurrent() - tFrame) * 1000), stderr)
+                }
+                CATransaction.commit()
+            }
             if thumbCache.count > 300 { thumbCache.removeAll(keepingCapacity: true) }
             if largeCache.count > 12 { largeCache.removeAll(keepingCapacity: true) }
             if textCache.count > 200 { textCache.removeAll(keepingCapacity: true) }

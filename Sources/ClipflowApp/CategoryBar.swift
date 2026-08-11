@@ -20,6 +20,10 @@ struct CategoryBar: View {
     @State private var anchorIndex = 0
     @State private var scrollToken = 0
     @State private var renameText = ""
+    /// + 按钮的悬停态。胶囊各自持有自己的，避免鼠标一划整条重算。
+    @State private var addHovering = false
+    /// 玻璃融合用的命名空间：同一 namespace 里的玻璃元素之间才会"流"过去
+    @Namespace private var glassNS
 
     private var overflowing: Bool { contentWidth > visibleWidth + 1 }
 
@@ -33,9 +37,7 @@ struct CategoryBar: View {
 
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 4) {
-                        ForEach(chips) { chip($0) }
-                    }
+                    chipRow
                     .padding(.vertical, 1)
                     .background(GeometryReader { g in
                         Color.clear.preference(key: ContentWidthKey.self, value: g.size.width)
@@ -48,10 +50,13 @@ struct CategoryBar: View {
                         proxy.scrollTo(chips[anchorIndex].id, anchor: .leading)
                     }
                 }
-                // 切到某个分类时把它滚进视野，否则选中的那个可能正好在视野外
-                .onChange(of: model.category) { _, new in
-                    withAnimation(.easeOut(duration: 0.18)) { proxy.scrollTo(new.id, anchor: .center) }
-                }
+                // ⚠️ **不要在 category 变化时自动滚动。**
+                //
+                // 用户点的胶囊本来就在他眼前，却要花 0.18s 把它滚到正中间 ——
+                // 点下去东西在动、还得等一下，主观上就是"卡"。
+                // 更糟的是 withAnimation 会波及同一更新周期里的其它变化，
+                // 连胶囊高亮切换都被拖成 0.18s 过渡。
+                // 滚动只在用户按翻页箭头时发生（那才是他要求滚动的时刻）。
             }
             .background(GeometryReader { g in
                 Color.clear.preference(key: VisibleWidthKey.self, value: g.size.width)
@@ -61,6 +66,32 @@ struct CategoryBar: View {
             arrow("chevron.right", step: 1)
             addButton
         }
+    }
+
+    /// 胶囊区。macOS 26 起包进 `GlassEffectContainer`，让玻璃元素共用一次采样。
+    ///
+    /// ⚠️ **容器 spacing 必须是 0。** 它表示"相距多近的玻璃要融合在一起"，
+    /// 之前给了 6 而胶囊间距只有 4 → 相邻胶囊被判定为一体，
+    /// 选中的强调色直接流到左右两个上去，实测非常难看。
+    ///
+    /// 选中态因此不做成"给玻璃染色"，而是一个**单独的、会滑动的指示器**
+    /// （见 ChipView 里的 matchedGeometryEffect）：既有滑过去的效果，又不污染邻居。
+    ///
+    /// 老系统上就是一个普通 HStack，样式退化但功能不缺。
+    @ViewBuilder
+    private var chipRow: some View {
+        if #available(macOS 26.0, *) {
+            GlassEffectContainer(spacing: 0) { rawChipRow }
+        } else {
+            rawChipRow
+        }
+    }
+
+    private var rawChipRow: some View {
+        HStack(spacing: 4) { ForEach(chips) { chip($0) } }
+            // 动画只挂在分类条这棵子树上 —— 挂到点击处会把"列表整批换内容"也一起
+            // animate，既难看又费
+            .animation(.smooth(duration: 0.24), value: model.category)
     }
 
     // MARK: 胶囊
@@ -78,44 +109,17 @@ struct CategoryBar: View {
                 .clipShape(Capsule())
                 .overlay(Capsule().strokeBorder(Color.accentColor.opacity(0.6), lineWidth: 1))
         } else {
-            chipLabel(c)
-                .contentShape(Capsule())
-                // 双击写在单击前面：SwiftUI 会先给 count:2 机会，落空才走 count:1
-                .onTapGesture(count: 2) { beginRename(c) }
-                .onTapGesture(count: 1) { model.category = c }
+            ChipView(category: c,
+                     label: c.label(groups: model.groups),
+                     count: c.count(kinds: model.counts, groups: model.groupCounts),
+                     selected: model.category == c,
+                     theme: t,
+                     onSelect: { model.category = c },
+                     onRename: { beginRename(c) },
+                     onDelete: c.groupID.map { gid in { model.deleteGroup(gid) } },
+                     glassNS: glassNS)
                 .id(c.id)
-                .contextMenu {
-                    if c.groupID != nil {
-                        Button("重命名…") { beginRename(c) }
-                        // 说清楚删的是分组这个标签、不是里面的内容，否则没人敢点
-                        Button("删除分组（条目保留）", role: .destructive) {
-                            if let gid = c.groupID { model.deleteGroup(gid) }
-                        }
-                    }
-                }
         }
-    }
-
-    /// 分组胶囊和内置分类**长得完全一样**，只多一个文件夹图标 ——
-    /// 长得不一样会让人以为它是另一种控件（之前它是个输入框，就被当成了输入区）。
-    private func chipLabel(_ c: PanelCategory) -> some View {
-        let selected = model.category == c
-        let n = c.count(kinds: model.counts, groups: model.groupCounts)
-        return HStack(spacing: 4) {
-            if c.groupID != nil { Image(systemName: "folder.fill").font(t.font(8)) }
-            Text(c.label(groups: model.groups)).font(t.font(11))
-            if n > 0 {
-                Text("\(n)")
-                    .font(t.font(9))
-                    .foregroundStyle(selected ? Color.white.opacity(0.8) : .secondary)
-            }
-        }
-        .lineLimit(1)
-        .fixedSize(horizontal: true, vertical: false)
-        .padding(.horizontal, 8).padding(.vertical, 3)
-        .background(Capsule().fill(selected ? AnyShapeStyle(Color.accentColor)
-                                            : AnyShapeStyle(.primary.opacity(0.07))))
-        .foregroundStyle(selected ? Color.white : Color.primary)
     }
 
     private func beginRename(_ c: PanelCategory) {
@@ -131,10 +135,11 @@ struct CategoryBar: View {
             Image(systemName: "plus")
                 .font(t.font(10))
                 .frame(width: t.size(20), height: t.size(19))
-                .background(Capsule().fill(.primary.opacity(0.07)))
+                .modifier(GlassPill(selected: false, hovering: addHovering))
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .onHover { addHovering = $0 }
         .help("新建分组（建好后双击胶囊改名）")
     }
 
@@ -163,4 +168,109 @@ private struct ContentWidthKey: PreferenceKey {
 private struct VisibleWidthKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+/// 单个分类胶囊。
+///
+/// **悬停态放在每个胶囊自己身上**，不放在 CategoryBar 上 ——
+/// 放在上面的话鼠标每划过一个胶囊都会让整条重算，反而卡。
+private struct ChipView: View {
+    let category: PanelCategory
+    let label: String
+    let count: Int
+    let selected: Bool
+    let theme: Theme
+    let onSelect: () -> Void
+    let onRename: () -> Void
+    /// nil = 内置分类，不能改名/删除
+    let onDelete: (() -> Void)?
+    let glassNS: Namespace.ID
+
+    @State private var hovering = false
+    @State private var lastTap = Date.distantPast
+    private var t: Theme { theme }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if onDelete != nil { Image(systemName: "folder.fill").font(t.font(8)) }
+            Text(label).font(t.font(11))
+            if count > 0 {
+                Text("\(count)")
+                    .font(t.font(9))
+                    .foregroundStyle(selected ? Color.white.opacity(0.8) : .secondary)
+            }
+        }
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
+        .padding(.horizontal, 8).padding(.vertical, 3)
+        // 选中指示器：**整条只有一个**，用 matchedGeometryEffect 在胶囊之间滑过去。
+        // 给每个胶囊各自染色的话，颜色会顺着玻璃容器流到相邻胶囊上（实测很丑）。
+        .background {
+            if selected {
+                Capsule().fill(Color.accentColor)
+                    .matchedGeometryEffect(id: "categorySelection", in: glassNS)
+            }
+        }
+        .modifier(GlassPill(selected: selected, hovering: hovering,
+                            glassID: category.id, namespace: glassNS))
+        .foregroundStyle(selected ? Color.white : Color.primary)
+        // 只给"选中态"这一个属性加动画，不是给整次 category 变更加 ——
+        // 后者会把列表整批换内容也一起 animate，既难看又费。
+        .animation(.smooth(duration: 0.26), value: selected)
+        .contentShape(Capsule())
+        // ⚠️ **绝不能用 `onTapGesture(count: 2)`。** 只要挂了它，单击就得等双击超时
+        // 才能确认（系统那一档，默认 0.5s）—— 实测点一下 370ms 才有反应。
+        //
+        // 也不能用 NSView 覆盖层来读 clickCount：盖在上面会吞掉鼠标，
+        // 玻璃的 `.interactive()` 收不到 hover，"水滴"反馈就完全没了；
+        // 放到 background 又收不到点击（实测点了完全没反应）。
+        //
+        // 所以按 AppKit 的语义自己判：单击**立即**生效，
+        // 第二下若落在系统双击间隔内再补一个改名动作。零等待，且不挡玻璃。
+        .onTapGesture {
+            let now = Date()
+            if onDelete != nil, now.timeIntervalSince(lastTap) < NSEvent.doubleClickInterval {
+                onRename()
+            } else {
+                onSelect()
+            }
+            lastTap = now
+        }
+        .onHover { hovering = $0 }
+        .contextMenu {
+            if let onDelete {
+                Button("重命名…", action: onRename)
+                // 说清楚删的是分组这个标签、不是里面的内容，否则没人敢点
+                Button("删除分组（条目保留）", role: .destructive, action: onDelete)
+            }
+        }
+    }
+}
+
+/// 胶囊背景。
+///
+/// macOS 26 起用 Liquid Glass（`glassEffect`），**但部署目标是 macOS 14**，
+/// 所以必须走可用性分支：老系统上退回普通的半透明胶囊，样式一致、不缺功能。
+/// 直接调新 API 会让老系统上的用户连 App 都起不来。
+private struct GlassPill: ViewModifier {
+    let selected: Bool
+    let hovering: Bool
+    var glassID: String? = nil
+    var namespace: Namespace.ID? = nil
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            // 不给玻璃染色：染色会顺着容器流到相邻胶囊上。选中色交给上层的滑动指示器。
+            let glass = content.glassEffect(.regular.interactive(), in: .capsule)
+            if let glassID, let namespace {
+                glass.glassEffectID(glassID, in: namespace)
+            } else {
+                glass
+            }
+        } else {
+            content.background(
+                Capsule().fill(AnyShapeStyle(.primary.opacity(hovering ? 0.16 : 0.07))))
+        }
+    }
 }
