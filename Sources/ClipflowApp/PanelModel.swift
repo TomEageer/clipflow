@@ -64,6 +64,32 @@ final class PanelModel: ObservableObject {
         s.save()
     }
 
+    /// 预览区「原文 / 处理结果」的上下比例。和左右分栏同一套夹紧逻辑。
+    @Published private(set) var previewSplitRatio: Double = ClipflowSettings.load().previewSplitRatio
+
+    func originalHeight(total: CGFloat, theme t: Theme) -> CGFloat {
+        CGFloat(SplitLayout.listWidth(total: Double(total),
+                                      ratio: previewSplitRatio,
+                                      minList: Double(t.minPaneHeight),
+                                      minPreview: Double(t.minPaneHeight),
+                                      splitter: Double(t.splitterWidth)))
+    }
+
+    func setOriginalHeight(_ h: CGFloat, total: CGFloat, theme t: Theme) {
+        guard let r = SplitLayout.ratio(forListWidth: Double(h),
+                                        total: Double(total),
+                                        minList: Double(t.minPaneHeight),
+                                        minPreview: Double(t.minPaneHeight),
+                                        splitter: Double(t.splitterWidth)) else { return }
+        previewSplitRatio = r
+    }
+
+    func persistPreviewSplit() {
+        var s = ClipflowSettings.load()
+        s.previewSplitRatio = previewSplitRatio
+        s.save()
+    }
+
     let transformers = TransformerRegistry.standard()
 
     /// 选中条目可用的变换。不适用的不显示 —— 列一堆点了没反应的动作最恼人。
@@ -302,6 +328,19 @@ final class PanelModel: ObservableObject {
         if let n { assignGroup(n) } else { popup = .none }
     }
 
+    /// 拖动排序：把 `id` 挪到 `target` 当前所在的位置。
+    /// 顺序落库，下次打开还是这个次序。
+    func moveGroup(_ id: Int64, before target: Int64) {
+        guard id != target else { return }
+        var ids = groups.compactMap(\.id)
+        guard let from = ids.firstIndex(of: id) else { return }
+        ids.remove(at: from)
+        guard let to = ids.firstIndex(of: target) else { return }
+        ids.insert(id, at: to)
+        try? store.reorderGroups(ids)
+        reloadGroups()
+    }
+
     func renameGroup(_ id: Int64, to name: String) {
         try? store.renameGroup(id, to: name)
         renamingGroup = nil
@@ -509,6 +548,7 @@ final class PanelModel: ObservableObject {
             refreshTransforms()
         }
         splitRatio = s.splitRatio
+        previewSplitRatio = s.previewSplitRatio
     }
 
     func handleKey(_ action: KeyAction) -> Bool {

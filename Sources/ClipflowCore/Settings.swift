@@ -67,6 +67,10 @@ public struct ClipflowSettings: Codable, Sendable, Equatable {
     /// 把窗口拉宽后所有增量都会压给预览，列表永远保持原样。
     public var splitRatio: Double = 0.53
 
+    /// 预览区里「原文」占的高度比例，剩下的给「处理结果」。拖中间那条横杠时更新。
+    /// 同样存比例不存像素 —— 面板高度会变。
+    public var previewSplitRatio: Double = 0.5
+
     /// 界面缩放。默认 1.0；小屏或视力需要时调大，所有字号与间距按比例走。
     public var uiScale: Double = 1.0
 
@@ -75,6 +79,40 @@ public struct ClipflowSettings: Codable, Sendable, Equatable {
     public var developerMode: Bool = false
 
     public init() {}
+
+    // MARK: 解码容错
+    //
+    // ⚠️ **必须手写 `init(from:)`，不能用合成的。**
+    //
+    // Swift 合成的 Decodable 对缺失的非可选字段直接抛 `keyNotFound`，
+    // **不会**回退到属性的默认值。而 `load()` 用 `try?` 吞异常 → 返回全默认值。
+    // 后果：**每加一个设置字段，用户已存的所有设置被静默清空** ——
+    // 面板尺寸、分栏比例、开发者模式、保留期一起回到出厂状态，还不报错。
+    // 实测踩过两次（加 splitRatio、加 previewSplitRatio）。
+    //
+    // 逐字段 `decodeIfPresent ?? 默认值` 之后，加字段就永远安全了。
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = ClipflowSettings()
+        func v<T: Decodable>(_ k: CodingKeys, _ fallback: T) -> T {
+            ((try? c.decodeIfPresent(T.self, forKey: k)) ?? nil) ?? fallback
+        }
+        retention        = v(.retention, d.retention)
+        sensitiveTTL     = v(.sensitiveTTL, d.sensitiveTTL)
+        maxItems         = v(.maxItems, d.maxItems)
+        maxStorageMB     = v(.maxStorageMB, d.maxStorageMB)
+        maxItemSizeMB    = v(.maxItemSizeMB, d.maxItemSizeMB)
+        excludedBundleIDs = v(.excludedBundleIDs, d.excludedBundleIDs)
+        captureOnStart   = v(.captureOnStart, d.captureOnStart)
+        autoCheckUpdates = v(.autoCheckUpdates, d.autoCheckUpdates)
+        enableOCR        = v(.enableOCR, d.enableOCR)
+        panelWidth       = v(.panelWidth, d.panelWidth)
+        panelHeight      = v(.panelHeight, d.panelHeight)
+        splitRatio       = v(.splitRatio, d.splitRatio)
+        previewSplitRatio = v(.previewSplitRatio, d.previewSplitRatio)
+        uiScale          = v(.uiScale, d.uiScale)
+        developerMode    = v(.developerMode, d.developerMode)
+    }
 
     // MARK: 持久化
 

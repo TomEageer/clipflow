@@ -32,6 +32,21 @@ extension ClipflowStore {
         }
     }
 
+    /// 按给定顺序重排分组。传进来的 id 列表就是最终顺序。
+    ///
+    /// 一次事务里全量重写 sortOrder，不做"只挪一个"的增量更新 ——
+    /// 增量更新要处理插队、并列、空洞一堆边界，而分组总量只有个位数，
+    /// 全量重写既简单又不可能算错。
+    public func reorderGroups(_ orderedIDs: [Int64]) throws {
+        guard !orderedIDs.isEmpty else { return }
+        try contentPool.write { db in
+            for (i, id) in orderedIDs.enumerated() {
+                try db.execute(sql: "UPDATE groups SET sortOrder = ? WHERE id = ?",
+                               arguments: [i, id])
+            }
+        }
+    }
+
     /// 删除分组。**只解绑，不删条目** —— 用户删的是分组这个标签，不是内容本身。
     /// 反过来做的话一次误点会连着内容一起没掉。
     public func deleteGroup(_ id: Int64) throws {

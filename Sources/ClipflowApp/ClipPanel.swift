@@ -369,26 +369,31 @@ private struct KeyHint: View {
 /// 用 tracking area 而不是 `.onHover` + `NSCursor.push/pop`：后者要求 push/pop 严格配对，
 /// 面板在悬停状态下直接关掉时收不到 exit 回调，光标会卡在左右箭头上下不来。
 private struct SplitterHandle: NSViewRepresentable {
-    /// 相对按下点的**累计**位移（与 DragGesture.translation 同语义）
+    /// 相对按下点的**累计**位移（与 DragGesture.translation 同语义）。
+    /// 竖向时已经翻过符号：往下拖 = 正数 = 上面那块变高。
     var onDrag: (CGFloat) -> Void
     var onEnd: () -> Void
+    var vertical = false
 
     func makeNSView(context: Context) -> HandleView {
         let v = HandleView()
         v.onDrag = onDrag
         v.onEnd = onEnd
+        v.vertical = vertical
         return v
     }
 
     func updateNSView(_ v: HandleView, context: Context) {
         v.onDrag = onDrag
         v.onEnd = onEnd
+        v.vertical = vertical
     }
 
     final class HandleView: NSView {
         var onDrag: ((CGFloat) -> Void)?
         var onEnd: (() -> Void)?
-        private var startX: CGFloat = 0
+        var vertical = false
+        private var start: CGFloat = 0
 
         override var mouseDownCanMoveWindow: Bool { false }
 
@@ -403,7 +408,7 @@ private struct SplitterHandle: NSViewRepresentable {
         /// enter/exit 里再显式 set 一次兜底。**不用 push/pop** ——
         /// 它要求严格配对，面板在悬停状态下直接关掉时收不到 exit，光标会卡住下不来。
         override func resetCursorRects() {
-            addCursorRect(bounds, cursor: .resizeLeftRight)
+            addCursorRect(bounds, cursor: vertical ? .resizeUpDown : .resizeLeftRight)
         }
 
         override func updateTrackingAreas() {
@@ -417,11 +422,11 @@ private struct SplitterHandle: NSViewRepresentable {
         }
 
         override func cursorUpdate(with event: NSEvent) {
-            NSCursor.resizeLeftRight.set()
+            (vertical ? NSCursor.resizeUpDown : NSCursor.resizeLeftRight).set()
         }
 
         override func mouseEntered(with event: NSEvent) {
-            NSCursor.resizeLeftRight.set()
+            (vertical ? NSCursor.resizeUpDown : NSCursor.resizeLeftRight).set()
         }
 
         override func mouseExited(with event: NSEvent) {
@@ -429,11 +434,13 @@ private struct SplitterHandle: NSViewRepresentable {
         }
 
         override func mouseDown(with event: NSEvent) {
-            startX = event.locationInWindow.x
+            start = vertical ? event.locationInWindow.y : event.locationInWindow.x
         }
 
         override func mouseDragged(with event: NSEvent) {
-            onDrag?(event.locationInWindow.x - startX)
+            // AppKit 的 y 轴朝上，往下拖是变小 —— 翻个号，让"往下 = 上面那块变高"
+            let now = vertical ? event.locationInWindow.y : event.locationInWindow.x
+            onDrag?(vertical ? (start - now) : (now - start))
         }
 
         override func mouseUp(with event: NSEvent) {
@@ -448,6 +455,8 @@ private struct PreviewPane: View {
     @ObservedObject var model: PanelModel
     let theme: Theme
     private var t: Theme { theme }
+    /// 竖向拖动开始时上面那块的高度。translation 是累计位移，必须记基准值。
+    @State private var vDragBase: CGFloat?
 
     var body: some View {
         Group {
@@ -470,7 +479,6 @@ private struct PreviewPane: View {
                             // 动作入口放这里而不是只留快捷键 ——
                             // 变换功能之前只能靠 ⌘T 触发，等于没人知道它存在。
                             groupButton
-                            if !model.availableTransforms.isEmpty { transformButton }
                         }
                         .font(t.font(10)).foregroundStyle(.secondary)
                         nameRow(item)
@@ -482,13 +490,26 @@ private struct PreviewPane: View {
                     if let big = model.largePreview(for: item) {
                         imagePane(big, item: item)
                     } else if model.processedText != nil {
-                        // 上下两块：原文在上、处理结果在下。
+                        // 上下两块：原文在上、处理结果在下，中间那条可上下拖动改高度。
                         // 原来是靠一个「格式化 / 原文」开关来回切，看不到两者的对照，
                         // 而变换本身又是点一下直接粘出去 —— 等于粘了才知道结果对不对。
+                        GeometryReader { geo in
+                            let total = geo.size.height
+                            let topH = model.originalHeight(total: total, theme: t)
+                            VStack(spacing: 0) {
+                                originalPane(item).frame(height: topH)
+                                vSplitter(total: total, topH: topH)
+                                processedPane(item, showBody: true)
+                            }
+                            .frame(width: geo.size.width, height: total)
+                        }
+                    } else if !model.availableTransforms.isEmpty {
+                        // 还没选变换：下半区只留标题栏，**变换入口就在它上面** ——
+                        // 放到最顶上的话，它和"对下半区做什么"这件事离得太远。
                         VStack(spacing: 0) {
                             originalPane(item)
                             Divider()
-                            processedPane(item)
+                            processedPane(item, showBody: false)
                         }
                     } else {
                         originalPane(item)
@@ -503,11 +524,23 @@ private struct PreviewPane: View {
                 }
                 // 菜单锚在按钮正下方，不再钉在整个面板的右下角 ——
                 // 那样点完按钮鼠标要横穿整个面板才够得着。
-                .overlay(alignment: .topTrailing) {
-                    if model.showTransforms {
-                        transformMenu.padding(.top, t.size(30)).padding(.trailing, 8)
-                    } else if model.showGroups {
-                        groupMenu.padding(.top, t.size(30)).padding(.trailing, 8)
+                // 菜单锚在触发它的按钮附近，不钉在整个面板的角上 ——
+                // 那样点完按钮鼠标要横穿整个面板才够得着。
+                //
+                // 底下垫一层透明的点击接收层：**点空白处要能关掉菜单**，
+                // 否则只能靠 Esc 或再点一次按钮，很别扭。
+                .overlay {
+                    if model.popup != .none {
+                        ZStack(alignment: model.popup == .groups ? .topTrailing : .bottomTrailing) {
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .onTapGesture { model.popup = .none }
+                            if model.popup == .groups {
+                                groupMenu.padding(.top, t.size(30)).padding(.trailing, 8)
+                            } else {
+                                transformMenu.padding(.bottom, t.size(30)).padding(.trailing, 8)
+                            }
+                        }
                     }
                 }
             } else {
@@ -566,8 +599,11 @@ private struct PreviewPane: View {
         .frame(maxHeight: .infinity)
     }
 
-    /// 下半区：处理结果 + 就地粘贴入口。同样可编辑、可复原。
-    private func processedPane(_ item: ClipItem) -> some View {
+    /// 下半区：处理结果 + 变换入口 + 就地粘贴。同样可编辑、可复原。
+    ///
+    /// **标题栏常驻**（只要有可用变换），因为「变换」按钮就住在这里 ——
+    /// 它要作用的对象就是下半区，放到最顶上离得太远。
+    private func processedPane(_ item: ClipItem, showBody: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             paneHeader(
                 title: model.activeTransform?.title ?? "处理结果",
@@ -576,33 +612,60 @@ private struct PreviewPane: View {
                 canEdit: !model.processedTruncated,
                 editing: $model.editingProcessed,
                 copied: model.copiedFlash == "结果",
+                showCopy: showBody,
                 onCopy: { model.copyProcessed() },
                 onRevert: { model.revertProcessed() },
+                leading: { transformButton },
                 trailing: {
-                    Button { model.pasteTransformed() } label: {
-                        HStack(spacing: 3) {
-                            Text("粘贴")
-                            Text("⌘⏎").foregroundStyle(.tertiary)
+                    if showBody {
+                        Button { model.pasteTransformed() } label: {
+                            HStack(spacing: 3) {
+                                Text("粘贴")
+                                Text("⌘⏎").foregroundStyle(.tertiary)
+                            }
+                            .font(t.font(10))
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Capsule().fill(.primary.opacity(0.08)))
+                            .contentShape(Capsule())
                         }
-                        .font(t.font(10))
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Capsule().fill(.primary.opacity(0.08)))
-                        .contentShape(Capsule())
+                        .buttonStyle(.plain)
+                        .help("把处理结果粘到刚才那个 App，库里的原始内容不变")
+                        Button { model.clearTransform() } label: {
+                            Image(systemName: "xmark").font(t.font(9))
+                        }
+                        .buttonStyle(.plain)
+                        .help("收起处理结果")
                     }
-                    .buttonStyle(.plain)
-                    .help("把处理结果粘到刚才那个 App，库里的原始内容不变")
-                    Button { model.clearTransform() } label: {
-                        Image(systemName: "xmark").font(t.font(9))
-                    }
-                    .buttonStyle(.plain)
-                    .help("收起处理结果")
                 })
 
-            // 处理结果**一直可编辑**，不设编辑开关：它本来就是派生数据，
-            // 改坏了点「复原」重算就行，没有"保护原始内容"的顾虑（原文那边才有）。
-            paneBody(text: model.processedBinding, editing: true, mono: true)
+            if showBody {
+                // 处理结果**一直可编辑**，不设编辑开关：它本来就是派生数据，
+                // 改坏了点「复原」重算就行，没有"保护原始内容"的顾虑（原文那边才有）。
+                paneBody(text: model.processedBinding, editing: true, mono: true)
+            }
         }
-        .frame(maxHeight: .infinity)
+        .frame(maxHeight: showBody ? .infinity : nil)
+    }
+
+    /// 预览区上下两块之间的拖动条。和左右分栏同一套实现（`SplitterHandle`），
+    /// 只是换成竖向 —— 同样必须走 AppKit，SwiftUI 手势会被窗口背景拖拽抢走。
+    private func vSplitter(total: CGFloat, topH: CGFloat) -> some View {
+        ZStack {
+            Rectangle().fill(Color.primary.opacity(0.04))
+            Rectangle().fill(Color.primary.opacity(0.12)).frame(height: 1)
+            SplitterHandle(
+                onDrag: { dy in
+                    let base = vDragBase ?? topH
+                    if vDragBase == nil { vDragBase = base }
+                    model.setOriginalHeight(base + dy, total: total, theme: t)
+                },
+                onEnd: {
+                    vDragBase = nil
+                    model.persistPreviewSplit()
+                },
+                vertical: true)
+        }
+        .frame(height: t.splitterWidth)
     }
 
     /// 两个区共用的正文。只读态用 Text（可选中），编辑态换 TextEditor 并给个边框，
@@ -633,17 +696,20 @@ private struct PreviewPane: View {
     /// 按钮组必须能随预览列变窄降级 —— 预览最窄只有 220pt，
     /// 挤五个带字的按钮必然折行变形（footer 已经踩过一次）。
     @ViewBuilder
-    private func paneHeader<Trailing: View>(
+    private func paneHeader<Leading: View, Trailing: View>(
         title: String,
         icon: String,
         edited: Bool,
         canEdit: Bool,
         editing: Binding<Bool>,
         copied: Bool,
+        showCopy: Bool = true,
         onCopy: @escaping () -> Void,
         onRevert: @escaping () -> Void,
+        @ViewBuilder leading: () -> Leading = { EmptyView() },
         @ViewBuilder trailing: () -> Trailing
     ) -> some View {
+        let leadingView = leading()
         let trailingView = trailing()
         HStack(spacing: 6) {
             Image(systemName: icon).font(t.font(9))
@@ -653,10 +719,12 @@ private struct PreviewPane: View {
                     .font(t.font(9)).foregroundStyle(.tertiary)
             }
             Spacer(minLength: 6)
+            leadingView
 
             if edited {
                 iconButton("arrow.uturn.backward", "复原为原始内容", action: onRevert)
             }
+            if showCopy {
             iconButton(editing.wrappedValue ? "checkmark.circle" : "pencil",
                        canEdit ? (editing.wrappedValue ? "完成编辑" : "编辑（只影响这一次，不写回库）")
                                : "内容过长已截断，不能编辑",
@@ -676,6 +744,7 @@ private struct PreviewPane: View {
             }
             .buttonStyle(.plain)
             .help("放进系统剪贴板 —— 不粘贴，也不关面板")
+            }
 
             trailingView
         }

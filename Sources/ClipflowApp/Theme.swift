@@ -21,6 +21,8 @@ struct Theme {
     /// 低于这个值列表会挤成一坨、预览会变成一条缝，都失去意义。
     var minListWidth: CGFloat { 300 * scale }
     var minPreviewWidth: CGFloat { 220 * scale }
+    /// 预览上下两块各自的最小高度。太矮了两块都看不清内容。
+    var minPaneHeight: CGFloat { 90 * scale }
     /// 分隔条命中区。视觉上只有 1pt 的线，但 1pt 的拖拽热区根本抓不住。
     var splitterWidth: CGFloat { 7 }
 

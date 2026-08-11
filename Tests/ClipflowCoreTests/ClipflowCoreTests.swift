@@ -1527,3 +1527,55 @@ struct PanelPlacementTests {
         }
     }
 }
+
+// MARK: - 设置解码容错
+
+@Suite("设置解码")
+struct SettingsDecodingTests {
+
+    /// ⚠️ 回归测试：这条挂过两次。
+    ///
+    /// Swift 合成的 Decodable 对缺失的非可选字段直接抛 keyNotFound，**不会**回退到默认值；
+    /// 而 `load()` 用 `try?` 吞异常后返回全默认值 —— 于是**每加一个设置字段，
+    /// 用户已存的所有设置被静默清空**（面板尺寸、分栏比例、开发者模式一起回出厂）。
+    @Test("老版本存的设置缺新字段时，其余字段必须保住")
+    func missingFieldKeepsOthers() throws {
+        // 模拟"加 previewSplitRatio 之前"存下来的 JSON：没有这个键
+        let old = """
+        {"retention":30,"sensitiveTTL":600,"maxItems":0,"maxStorageMB":4096,
+         "maxItemSizeMB":50,"excludedBundleIDs":["com.x.y"],"captureOnStart":true,
+         "autoCheckUpdates":false,"enableOCR":false,"panelWidth":896,"panelHeight":965,
+         "splitRatio":0.41,"uiScale":1.15,"developerMode":true}
+        """
+        let s = try JSONDecoder().decode(ClipflowSettings.self, from: Data(old.utf8))
+
+        #expect(s.panelWidth == 896, "加字段把用户的面板尺寸清了")
+        #expect(s.panelHeight == 965)
+        #expect(abs(s.splitRatio - 0.41) < 0.0001)
+        #expect(s.developerMode == true)
+        #expect(s.uiScale == 1.15)
+        #expect(s.maxStorageMB == 4096)
+        #expect(s.enableOCR == false)
+        #expect(s.excludedBundleIDs == ["com.x.y"])
+        // 缺失的新字段回落到默认值，而不是让整次解码失败
+        #expect(s.previewSplitRatio == ClipflowSettings().previewSplitRatio)
+    }
+
+    @Test("完全空的 JSON 也能解出全默认值，不抛异常")
+    func emptyObjectDecodes() throws {
+        let s = try JSONDecoder().decode(ClipflowSettings.self, from: Data("{}".utf8))
+        #expect(s == ClipflowSettings())
+    }
+
+    @Test("往返编解码保真")
+    func roundTrip() throws {
+        var s = ClipflowSettings()
+        s.panelWidth = 1234
+        s.splitRatio = 0.37
+        s.previewSplitRatio = 0.62
+        s.developerMode = true
+        let back = try JSONDecoder().decode(ClipflowSettings.self,
+                                            from: try JSONEncoder().encode(s))
+        #expect(back == s)
+    }
+}
