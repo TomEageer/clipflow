@@ -58,6 +58,17 @@ public struct ClipflowSettings: Codable, Sendable, Equatable {
     /// 对图片做文字识别，让截图里的文字可被搜索。完全本地（Vision 框架），但耗电。
     public var enableOCR: Bool = true
 
+    /// 面板尺寸。用户可自由拉伸，记住上次的大小。
+    public var panelWidth: Double = 720
+    public var panelHeight: Double = 480
+
+    /// 界面缩放。默认 1.0；小屏或视力需要时调大，所有字号与间距按比例走。
+    public var uiScale: Double = 1.0
+
+    /// 开发者模式：自动识别 JSON 并格式化预览，启用粘贴变换（JSON / URL / Base64 等）。
+    /// 默认关 —— 对非程序员完全隐形。
+    public var developerMode: Bool = false
+
     public init() {}
 
     // MARK: 持久化

@@ -280,6 +280,35 @@ private struct GeneralTab: View {
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
 
+            Section("外观") {
+                LabeledContent("界面大小") {
+                    Picker("", selection: $model.settings.uiScale) {
+                        ForEach(Theme.steps, id: \.self) { Text(Theme.label($0)).tag($0) }
+                    }.labelsHidden().frame(width: 110)
+                }
+                LabeledContent("面板尺寸") {
+                    HStack(spacing: 6) {
+                        Text("\(Int(model.settings.panelWidth)) × \(Int(model.settings.panelHeight))")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        Button("恢复默认") {
+                            model.settings.panelWidth = 720
+                            model.settings.panelHeight = 480
+                        }.controlSize(.small)
+                    }
+                }
+                Text("面板可直接用鼠标拖边框调整大小，会自动记住。界面大小改动在下次唤出面板时生效。")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+
+            Section("开发者模式") {
+                Toggle("启用开发者功能", isOn: $model.settings.developerMode)
+                Text("开启后：自动识别 JSON 并在预览里格式化显示；"
+                     + "选中条目按 ⌘T 可选择粘贴变换（JSON 格式化 / 压缩 / 转义 / 反转义、"
+                     + "URL 编解码、Base64 编解码）。变换只影响这一次粘贴，不改动库里的原始内容。")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+
             Section("图片文字识别") {
                 Toggle("识别截图里的文字，使其可被搜索", isOn: $model.settings.enableOCR)
                 if let o = model.ocrStats {

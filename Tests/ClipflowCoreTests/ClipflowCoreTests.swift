@@ -1196,3 +1196,103 @@ struct OCRStoreTests {
         #expect(try store.pendingOCRCount() == 0)
     }
 }
+
+// MARK: - 粘贴变换
+
+@Suite("粘贴变换")
+struct TransformTests {
+
+    private let reg = TransformerRegistry.standard()
+
+    @Test("JSON 识别：先形状后解析")
+    func detectJSON() {
+        #expect(JSONDetector.looksLikeJSON(#"{"a":1,"b":[1,2]}"#))
+        #expect(JSONDetector.looksLikeJSON("[1, 2, 3]"))
+        #expect(!JSONDetector.looksLikeJSON("这不是 JSON"))
+        #expect(!JSONDetector.looksLikeJSON(#"{"a":1"#), "残缺 JSON 不该通过")
+        // 形状对但内容非法
+        #expect(!JSONDetector.looksLikeJSON("{not json}"))
+    }
+
+    @Test("JSON 格式化与压缩往返")
+    func jsonRoundTrip() throws {
+        let src = #"{"operateWay":"update","sql":"UPDATE t SET a=1","pretty":1}"#
+        let pretty = try #require(JSONDetector.pretty(src))
+        #expect(pretty.contains("\n"), "没有换行说明没格式化")
+        let mini = try #require(JSONDetector.minify(pretty))
+        #expect(!mini.contains("\n"))
+        // 压缩回去语义要一致
+        let a = JSONDetector.parse(src) as? [String: Any]
+        let b = JSONDetector.parse(mini) as? [String: Any]
+        #expect(a?.count == b?.count)
+    }
+
+    /// 斜杠不该被转义成 \/ —— 那会让 SQL、URL 里的路径变得难读
+    @Test("格式化不转义斜杠")
+    func noSlashEscaping() throws {
+        let src = #"{"url":"https://example.com/a/b"}"#
+        let pretty = try #require(JSONDetector.pretty(src))
+        #expect(!pretty.contains(#"\/"#))
+    }
+
+    @Test("JSON 转义与反转义互逆")
+    func escapeRoundTrip() throws {
+        let src = "{\n  \"a\": \"x\\y\"\n}"
+        let esc = try JSONEscapeTransformer().apply(to: src)
+        #expect(!esc.contains("\n"))
+        let back = try JSONUnescapeTransformer().apply(to: esc)
+        #expect(back == src)
+    }
+
+    @Test("URL 编解码互逆，且编码 & = ? +")
+    func urlRoundTrip() throws {
+        let src = "a=1&b=中文 空格?x+y"
+        let enc = try URLEncodeTransformer().apply(to: src)
+        #expect(!enc.contains("&"))
+        #expect(!enc.contains("="))
+        #expect(!enc.contains(" "))
+        #expect(try URLDecodeTransformer().apply(to: enc) == src)
+    }
+
+    @Test("Base64 编解码互逆")
+    func base64RoundTrip() throws {
+        let src = "订单支付回调 orderId=2606"
+        let enc = try Base64EncodeTransformer().apply(to: src)
+        #expect(try Base64DecodeTransformer().apply(to: enc) == src)
+    }
+
+    /// 不这么判的话，任何一段英文都会显示"可 Base64 解码"，然后解出乱码
+    @Test("Base64 解码只在真像 Base64 时才提供")
+    func base64Guard() {
+        let t = Base64DecodeTransformer()
+        #expect(!t.canApply(to: "这是一段普通中文"))
+        #expect(!t.canApply(to: "hello world"))
+        #expect(t.canApply(to: Data("hello world".utf8).base64EncodedString()))
+    }
+
+    /// 不适用的变换不该出现在菜单里
+    @Test("只列出适用的变换")
+    func onlyApplicable() {
+        let plain = reg.applicable(to: "普通一句话", developerMode: true)
+        #expect(!plain.contains { $0.id == "json.pretty" }, "非 JSON 不该出现 JSON 格式化")
+
+        let json = reg.applicable(to: #"{"a":1}"#, developerMode: true)
+        #expect(json.contains { $0.id == "json.pretty" })
+        #expect(json.contains { $0.id == "json.minify" })
+    }
+
+    /// 开发者功能对普通用户完全隐形
+    @Test("非开发者模式下不出现开发者变换")
+    func developerGating() {
+        let list = reg.applicable(to: #"{"a":1}"#, developerMode: false)
+        #expect(!list.contains { $0.developerOnly }, "开发者变换泄漏给了普通模式")
+        #expect(list.allSatisfy { !$0.developerOnly })
+    }
+
+    @Test("去空行只在真有连续空行时提供")
+    func trimGating() {
+        let t = TrimBlankLinesTransformer()
+        #expect(!t.canApply(to: "a\n\nb"))
+        #expect(t.canApply(to: "a\n\n\n\nb"))
+    }
+}

@@ -241,7 +241,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: 面板
 
     private func setupPanel() {
-        panel = ClipPanel(contentRect: NSRect(x: 0, y: 0, width: 700, height: 470))
+        let saved = ClipflowSettings.load()
+        panel = ClipPanel(contentRect: NSRect(x: 0, y: 0,
+                                              width: saved.panelWidth, height: saved.panelHeight))
+        panel.onResize = { size in
+            var s = ClipflowSettings.load()
+            s.panelWidth = Double(size.width)
+            s.panelHeight = Double(size.height)
+            s.save()
+        }
         panel.contentView = NSHostingView(rootView: ClipListView(model: model))
         panel.onDismiss = { [weak self] in self?.hidePanel() }
         panel.onModifierKey = { [weak self] action in
@@ -254,6 +262,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func showPanel() {
+        // 设置里改过缩放/尺寸的话，这次唤出就生效
+        let s = ClipflowSettings.load()
+        model.uiScale = s.uiScale
+        if abs(panel.frame.width - s.panelWidth) > 1 || abs(panel.frame.height - s.panelHeight) > 1 {
+            panel.setContentSize(NSSize(width: s.panelWidth, height: s.panelHeight))
+        }
         // 先记住当前前台 App，关闭时原样还回去
         let front = NSWorkspace.shared.frontmostApplication
         if front?.bundleIdentifier != Bundle.main.bundleIdentifier { previousApp = front }

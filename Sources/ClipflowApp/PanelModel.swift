@@ -13,6 +13,50 @@ final class PanelModel: ObservableObject {
     /// 面板开在鼠标左侧时为 true：列表与预览左右对调，让可点击的列表贴着鼠标。
     /// 只镜像左右，**不做上下反转** —— 列表倒序违反阅读直觉。
     @Published var mirrored: Bool = false
+    /// 界面缩放系数，从设置读；改了立刻反映到面板
+    @Published var uiScale: Double = ClipflowSettings.load().uiScale
+    @Published var developerMode: Bool = ClipflowSettings.load().developerMode
+    /// 变换菜单是否展开
+    @Published var showTransforms = false
+
+    let transformers = TransformerRegistry.standard()
+
+    /// 选中条目可用的变换。不适用的不显示 —— 列一堆点了没反应的动作最恼人。
+    var availableTransforms: [Transformer] {
+        guard let item = selectedItem else { return [] }
+        let text = fullText(for: item)
+        guard !text.isEmpty, text.count < 500_000 else { return [] }
+        return transformers.applicable(to: text, developerMode: developerMode)
+    }
+
+    /// 开发者模式下，JSON 自动格式化后展示。识别失败就原样返回。
+    func displayText(for item: ClipItem) -> (text: String, isFormattedJSON: Bool) {
+        let raw = fullText(for: item)
+        guard developerMode, JSONDetector.looksLikeJSON(raw),
+              let pretty = JSONDetector.pretty(raw), pretty != raw else {
+            return (raw, false)
+        }
+        return (pretty, true)
+    }
+
+    /// 应用变换并粘贴。变换只影响这一次粘贴，**不改库里的原始内容** ——
+    /// 保真是本项目的地基，原始数据不能被就地改写。
+    func applyTransform(_ t: Transformer) {
+        guard let item = selectedItem, let id = item.id else { return }
+        let source = fullText(for: item)
+        guard let out = try? t.apply(to: source) else {
+            onError?("变换失败：\(t.title)")
+            return
+        }
+        showTransforms = false
+        try? store.touch(itemID: id)
+        do {
+            try paster.stage(representations: [("public.utf8-plain-text", Data(out.utf8), 0)])
+            onPaste?()
+        } catch {
+            onError?("\(error)")
+        }
+    }
 
     /// 当前分类。切换要靠点击，不自动跳 —— 自动跳会让人找不到刚才那条。
     @Published var category: PanelCategory = .all { didSet { reload() } }
@@ -75,6 +119,7 @@ final class PanelModel: ObservableObject {
             } else {
                 selection = 0
             }
+            showTransforms = false
             if thumbCache.count > 300 { thumbCache.removeAll(keepingCapacity: true) }
             if largeCache.count > 12 { largeCache.removeAll(keepingCapacity: true) }
             if textCache.count > 200 { textCache.removeAll(keepingCapacity: true) }
@@ -166,12 +211,18 @@ final class PanelModel: ObservableObject {
             select(selection < items.count - 1 ? selection + 1 : 0, from: .keyboard)
             return true
         case .confirm:  confirm(); return true
-        case .cancel:   onClose?(); return true
+        case .cancel:
+            // 变换菜单开着时，esc 先关它，再按才关面板 —— 逐层退出符合直觉
+            if showTransforms { showTransforms = false } else { onClose?() }
+            return true
         case .pick(let i):
             guard i < items.count else { return true }
             select(i, from: .keyboard); confirm(); return true
         case .pin:      togglePin(); return true
         case .delete:   deleteSelected(); return true
+        case .transform:
+            guard !availableTransforms.isEmpty else { return true }
+            showTransforms.toggle(); return true
         }
     }
 

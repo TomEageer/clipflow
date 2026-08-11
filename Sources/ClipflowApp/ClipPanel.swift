@@ -15,13 +15,16 @@ final class ClipPanel: NSPanel {
 
     init(contentRect: NSRect) {
         super.init(contentRect: contentRect,
-                   styleMask: [.nonactivatingPanel, .titled, .fullSizeContentView],
+                   styleMask: [.nonactivatingPanel, .titled, .fullSizeContentView, .resizable],
                    backing: .buffered, defer: false)
         isFloatingPanel = true
         level = .floating
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
         isMovableByWindowBackground = true
+        // 可自由拉伸，但给下限 —— 太小的话列表和预览都失去意义
+        minSize = NSSize(width: 520, height: 320)
+        maxSize = NSSize(width: 1600, height: 1200)
         standardWindowButton(.closeButton)?.isHidden = true
         standardWindowButton(.miniaturizeButton)?.isHidden = true
         standardWindowButton(.zoomButton)?.isHidden = true
@@ -88,6 +91,15 @@ final class ClipPanel: NSPanel {
         return anchor
     }
 
+    /// 记住用户拉过的尺寸。下次唤出保持一致，不然每次都要重拉一遍。
+    var onResize: ((NSSize) -> Void)?
+
+    override func setFrame(_ frameRect: NSRect, display flag: Bool) {
+        let changed = frameRect.size != frame.size
+        super.setFrame(frameRect, display: flag)
+        if changed, isVisible { onResize?(frameRect.size) }
+    }
+
     /// 淡入。130ms —— 快到不觉得在等，又不会"啪"地跳出来。
     func fadeIn() {
         alphaValue = 0
@@ -126,6 +138,7 @@ final class ClipPanel: NSPanel {
             else if let c = event.charactersIgnoringModifiers?.lowercased().first {
                 if c.isNumber, c != "0" { action = .pick(Int(String(c))! - 1) }
                 else if c == "p" { action = .pin }
+                else if c == "t" { action = .transform }
             }
             if let action, self.onModifierKey?(action) == true { return nil }
             return event
@@ -164,13 +177,15 @@ final class ClipPanel: NSPanel {
 struct ClipListView: View {
     @ObservedObject var model: PanelModel
 
+    private var t: Theme { Theme(scale: model.uiScale) }
+
     /// 面板开在鼠标左侧时为 true：列表与预览左右对调，让列表贴着鼠标。
     private var mirrored: Bool { model.mirrored }
 
     var body: some View {
         HStack(spacing: 0) {
             if mirrored {
-                PreviewPane(model: model).frame(width: 320)
+                PreviewPane(model: model).frame(width: t.previewWidth)
                 Divider().opacity(0.5)
             }
 
@@ -178,11 +193,14 @@ struct ClipListView: View {
 
             if !mirrored {
                 Divider().opacity(0.5)
-                PreviewPane(model: model).frame(width: 320)
+                PreviewPane(model: model).frame(width: t.previewWidth)
             }
         }
-        .frame(width: 700, height: 470)
+        .frame(minWidth: 520, maxWidth: .infinity, minHeight: 320, maxHeight: .infinity)
         .background(.regularMaterial)
+        .overlay(alignment: .bottomTrailing) {
+            if model.showTransforms { transformMenu }
+        }
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.primary.opacity(0.08)))
     }
@@ -212,7 +230,8 @@ struct ClipListView: View {
                                 ForEach(Array(model.items.enumerated()), id: \.element.id) { idx, item in
                                     RowView(item: item, index: idx,
                                             selected: idx == model.selection,
-                                            thumbnail: model.thumbnail(for: item))
+                                            thumbnail: model.thumbnail(for: item),
+                                            theme: t)
                                         .id(item.id)
                                         .contentShape(Rectangle())
                                         // 鼠标划过即选中 —— 划上去没反馈是最直接的"生硬"
@@ -252,8 +271,45 @@ struct ClipListView: View {
         .padding(.bottom, 8)
     }
 
+    /// 变换菜单。**是对选中条目的动作，不是独立工具箱** ——
+    /// 剪贴板管理器本来就站在复制与粘贴之间，在粘出去的路上转换是它天然该干的事。
+    private var transformMenu: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("粘贴为…")
+                .font(t.font(10)).foregroundStyle(.secondary)
+                .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 4)
+            Divider()
+            ForEach(Array(model.availableTransforms.enumerated()), id: \.element.id) { _, tr in
+                Button {
+                    model.applyTransform(tr)
+                } label: {
+                    HStack(spacing: 8) {
+                        Text(tr.group.rawValue)
+                            .font(t.font(9))
+                            .foregroundStyle(.secondary)
+                            .frame(width: t.size(34), alignment: .leading)
+                        Text(tr.title).font(t.font(12))
+                        Spacer(minLength: 12)
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            Divider()
+            Text("esc 关闭")
+                .font(t.font(9)).foregroundStyle(.tertiary)
+                .padding(.horizontal, 10).padding(.vertical, 5)
+        }
+        .frame(width: t.size(230))
+        .background(RoundedRectangle(cornerRadius: 8).fill(.thickMaterial))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.primary.opacity(0.12)))
+        .shadow(radius: 12, y: 4)
+        .padding(14)
+    }
+
     private var searchBar: some View {
-        SearchField(text: $model.query, onKey: model.handleKey)
+        SearchField(text: $model.query, onKey: model.handleKey, fontSize: t.size(14))
             .padding(.horizontal, 12)
             .padding(.top, 10).padding(.bottom, 8)
     }
@@ -266,6 +322,7 @@ struct ClipListView: View {
             KeyHint("⏎", "粘贴")
             KeyHint("⌘P", model.selectedIsPinned ? "取消置顶" : "置顶")
             KeyHint("⌘⌫", "删除")
+            if !model.availableTransforms.isEmpty { KeyHint("⌘T", "变换") }
         }
         .font(.system(size: 10))
         .foregroundStyle(.secondary)
@@ -336,12 +393,22 @@ private struct PreviewPane: View {
                             }
                             .padding(10)
                         } else {
-                            Text(model.fullText(for: item))
-                                .font(.system(size: 11,
-                                              design: item.kind == .code ? .monospaced : .default))
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(12)
+                            let shown = model.displayText(for: item)
+                            VStack(alignment: .leading, spacing: 6) {
+                                if shown.isFormattedJSON {
+                                    Label("已识别为 JSON，自动格式化显示",
+                                          systemImage: "curlybraces")
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(.secondary)
+                                }
+                                Text(shown.text)
+                                    .font(.system(size: 11,
+                                                  design: (shown.isFormattedJSON || item.kind == .code)
+                                                          ? .monospaced : .default))
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .padding(12)
                         }
                     }
 
@@ -369,26 +436,27 @@ private struct RowView: View {
     let index: Int
     let selected: Bool
     let thumbnail: NSImage?
+    let theme: Theme
 
     var body: some View {
         HStack(spacing: 9) {
             if let thumbnail {
                 Image(nsImage: thumbnail)
                     .resizable().aspectRatio(contentMode: .fill)
-                    .frame(width: 34, height: 26)
+                    .frame(width: theme.rowThumbWidth, height: theme.rowThumbHeight)
                     .clipShape(RoundedRectangle(cornerRadius: 3))
                     .overlay(RoundedRectangle(cornerRadius: 3)
                         .strokeBorder(.primary.opacity(0.1), lineWidth: 0.5))
             } else {
                 Image(systemName: icon)
-                    .font(.system(size: 13))
-                    .frame(width: 34)
+                    .font(theme.font(13))
+                    .frame(width: theme.iconColumn)
                     .foregroundStyle(selected ? .white : .secondary)
             }
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(item.preview.replacingOccurrences(of: "\n", with: " "))
-                    .lineLimit(1).font(.system(size: 12))
+                    .lineLimit(1).font(theme.font(12))
                 HStack(spacing: 4) {
                     if item.pinned { Image(systemName: "pin.fill").font(.system(size: 7)) }
                     if item.sensitivity == .sensitive { Image(systemName: "lock.fill").font(.system(size: 7)) }
@@ -396,13 +464,13 @@ private struct RowView: View {
                     Text("·")
                     Text(item.lastUsedAt, style: .relative)
                 }
-                .font(.system(size: 9))
+                .font(theme.font(9))
                 .foregroundStyle(selected ? Color.white.opacity(0.75) : .secondary)
             }
             Spacer(minLength: 4)
             if index < 9 {
                 Text("⌘\(index + 1)")
-                    .font(.system(size: 9, design: .rounded))
+                    .font(theme.font(9, design: .rounded))
                     .foregroundStyle(selected ? Color.white.opacity(0.65)
                                              : Color.secondary.opacity(0.45))
             }
@@ -439,6 +507,7 @@ private struct RowView: View {
 private struct SearchField: NSViewRepresentable {
     @Binding var text: String
     var onKey: (KeyAction) -> Bool
+    var fontSize: CGFloat = 14
 
     func makeNSView(context: Context) -> NSTextField {
         let tf = NSTextField()
@@ -447,12 +516,13 @@ private struct SearchField: NSViewRepresentable {
         tf.drawsBackground = false
         tf.focusRingType = .none
         tf.delegate = context.coordinator
-        tf.font = .systemFont(ofSize: 14)
+        tf.font = .systemFont(ofSize: fontSize)
         return tf
     }
 
     func updateNSView(_ nsView: NSTextField, context: Context) {
         context.coordinator.onKey = onKey
+        if nsView.font?.pointSize != fontSize { nsView.font = .systemFont(ofSize: fontSize) }
         if nsView.stringValue != text { nsView.stringValue = text }
         // 面板每次弹出都能直接打字，不用先点一下
         if nsView.window != nil, nsView.window?.firstResponder !== nsView.currentEditor() {
@@ -497,4 +567,4 @@ private struct SearchField: NSViewRepresentable {
     }
 }
 
-enum KeyAction { case up, down, confirm, cancel, pick(Int), delete, pin }
+enum KeyAction { case up, down, confirm, cancel, pick(Int), delete, pin, transform }
