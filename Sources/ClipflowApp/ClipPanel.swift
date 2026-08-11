@@ -135,6 +135,7 @@ final class ClipPanel: NSPanel {
 
             var action: KeyAction?
             if event.keyCode == 51 { action = .delete }               // ⌘⌫
+            else if event.keyCode == 36 { action = .pasteTransformed } // ⌘⏎
             else if let c = event.charactersIgnoringModifiers?.lowercased().first {
                 if c.isNumber, c != "0" { action = .pick(Int(String(c))! - 1) }
                 else if c == "p" { action = .pin }
@@ -207,9 +208,6 @@ struct ClipListView: View {
         }
         .frame(minWidth: 520, maxWidth: .infinity, minHeight: 320, maxHeight: .infinity)
         .background(.regularMaterial)
-        .overlay(alignment: .bottomTrailing) {
-            if model.showTransforms { transformMenu }
-        }
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.primary.opacity(0.08)))
     }
@@ -302,60 +300,45 @@ struct ClipListView: View {
         .padding(.bottom, 8)
     }
 
-    /// 变换菜单。**是对选中条目的动作，不是独立工具箱** ——
-    /// 剪贴板管理器本来就站在复制与粘贴之间，在粘出去的路上转换是它天然该干的事。
-    private var transformMenu: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("粘贴为…")
-                .font(t.font(10)).foregroundStyle(.secondary)
-                .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 4)
-            Divider()
-            ForEach(Array(model.availableTransforms.enumerated()), id: \.element.id) { _, tr in
-                Button {
-                    model.applyTransform(tr)
-                } label: {
-                    HStack(spacing: 8) {
-                        Text(tr.group.rawValue)
-                            .font(t.font(9))
-                            .foregroundStyle(.secondary)
-                            .frame(width: t.size(34), alignment: .leading)
-                        Text(tr.title).font(t.font(12))
-                        Spacer(minLength: 12)
-                    }
-                    .padding(.horizontal, 10).padding(.vertical, 5)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-            Divider()
-            Text("esc 关闭")
-                .font(t.font(9)).foregroundStyle(.tertiary)
-                .padding(.horizontal, 10).padding(.vertical, 5)
-        }
-        .frame(width: t.size(230))
-        .background(RoundedRectangle(cornerRadius: 8).fill(.thickMaterial))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.primary.opacity(0.12)))
-        .shadow(radius: 12, y: 4)
-        .padding(14)
-    }
-
     private var searchBar: some View {
         SearchField(text: $model.query, onKey: model.handleKey, fontSize: t.size(14))
             .padding(.horizontal, 12)
             .padding(.top, 10).padding(.bottom, 8)
     }
 
+    /// 底部快捷键条。
+    ///
+    /// ⚠️ **必须能随列宽降级。** 固定一行五个提示的话，列被拖窄后
+    /// 「粘贴」「变换」会被压成两行，整条 footer 变形（实测）。
+    /// `ViewThatFits` 从全量往下退，退到只剩条数为止。
     private var footer: some View {
+        ViewThatFits(in: .horizontal) {
+            footerRow(allHints)
+            footerRow(Array(allHints.prefix(3)))
+            footerRow(Array(allHints.prefix(2)))
+            footerRow([])
+        }
+    }
+
+    /// 按重要性排序：越靠前越晚被砍掉
+    private var allHints: [(String, String)] {
+        var h: [(String, String)] = [("↑↓", "选择"), ("⏎", "粘贴")]
+        if model.processedText != nil { h.append(("⌘⏎", "粘处理结果")) }
+        if !model.availableTransforms.isEmpty { h.append(("⌘T", "变换")) }
+        h.append(("⌘P", model.selectedIsPinned ? "取消置顶" : "置顶"))
+        h.append(("⌘⌫", "删除"))
+        return h
+    }
+
+    private func footerRow(_ hints: [(String, String)]) -> some View {
         HStack(spacing: 12) {
             Text("\(model.total) 条")
-            Spacer()
-            KeyHint("↑↓", "选择")
-            KeyHint("⏎", "粘贴")
-            KeyHint("⌘P", model.selectedIsPinned ? "取消置顶" : "置顶")
-            KeyHint("⌘⌫", "删除")
-            if !model.availableTransforms.isEmpty { KeyHint("⌘T", "变换") }
+            Spacer(minLength: 8)
+            ForEach(hints, id: \.0) { KeyHint($0.0, $0.1) }
         }
         .font(.system(size: 10))
+        .lineLimit(1)
+        .fixedSize(horizontal: false, vertical: true)
         .foregroundStyle(.secondary)
         .padding(.horizontal, 12).padding(.vertical, 7)
         .background(.thinMaterial)
@@ -373,6 +356,9 @@ private struct KeyHint: View {
                 .background(RoundedRectangle(cornerRadius: 3).fill(.primary.opacity(0.08)))
             Text(label)
         }
+        // 不许在提示内部折行 —— 折了整条 footer 就变高变形，
+        // 该做的是让 ViewThatFits 把整个提示砍掉，不是把它压扁
+        .fixedSize(horizontal: true, vertical: false)
     }
 }
 
@@ -463,7 +449,6 @@ private struct PreviewPane: View {
                             Spacer(minLength: 6)
                             // 动作入口放这里而不是只留快捷键 ——
                             // 变换功能之前只能靠 ⌘T 触发，等于没人知道它存在。
-                            if model.selectedIsJSON { jsonToggle }
                             if !model.availableTransforms.isEmpty { transformButton }
                         }
                         .font(t.font(10)).foregroundStyle(.secondary)
@@ -474,37 +459,20 @@ private struct PreviewPane: View {
 
                     Divider().opacity(0.4)
 
-                    ScrollView {
-                        if let big = model.largePreview(for: item) {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Image(nsImage: big)
-                                    .resizable().aspectRatio(contentMode: .fit)
-                                    .frame(maxWidth: .infinity)
-                                // 图里识别出的文字 —— 搜索能命中它，所以要让用户看得见
-                                if let ocr = model.ocrText(for: item) {
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Label("图中文字", systemImage: "text.viewfinder")
-                                            .font(t.font(10)).foregroundStyle(.secondary)
-                                        Text(ocr)
-                                            .font(t.font(10))
-                                            .textSelection(.enabled)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                    }
-                                }
-                            }
-                            .padding(10)
-                        } else {
-                            let shown = model.displayText(for: item)
-                            Text(shown.text)
-                                .font(t.font(11,
-                                              design: (shown.isFormattedJSON || item.kind == .code)
-                                                      ? .monospaced : .default))
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(12)
+                    if let big = model.largePreview(for: item) {
+                        imagePane(big, item: item)
+                    } else if model.processedText != nil {
+                        // 上下两块：原文在上、处理结果在下。
+                        // 原来是靠一个「格式化 / 原文」开关来回切，看不到两者的对照，
+                        // 而变换本身又是点一下直接粘出去 —— 等于粘了才知道结果对不对。
+                        VStack(spacing: 0) {
+                            textPane(item, label: "原文", text: model.fullText(for: item))
+                            Divider()
+                            processedPane(item)
                         }
+                    } else {
+                        textPane(item, label: nil, text: model.fullText(for: item))
                     }
-                    .frame(maxHeight: .infinity)
 
                     Divider().opacity(0.4)
                     Text(model.formatSummary(for: item))
@@ -512,6 +480,13 @@ private struct PreviewPane: View {
                         .foregroundStyle(.tertiary)
                         .lineLimit(2)
                         .padding(.horizontal, 12).padding(.vertical, 7)
+                }
+                // 菜单锚在按钮正下方，不再钉在整个面板的右下角 ——
+                // 那样点完按钮鼠标要横穿整个面板才够得着。
+                .overlay(alignment: .topTrailing) {
+                    if model.showTransforms {
+                        transformMenu.padding(.top, t.size(30)).padding(.trailing, 8)
+                    }
                 }
             } else {
                 VStack { Spacer()
@@ -522,22 +497,92 @@ private struct PreviewPane: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    /// JSON 徽章兼开关。识别为 JSON 时才出现，点一下在「格式化 / 原文」之间切。
-    /// 之前这个能力藏在设置里的开发者开关后面，等于没做。
-    private var jsonToggle: some View {
-        Button { model.prettyJSON.toggle() } label: {
-            HStack(spacing: 3) {
-                Image(systemName: "curlybraces")
-                Text(model.prettyJSON ? "原文" : "格式化")
+    // MARK: 三种内容区
+
+    private func imagePane(_ image: NSImage, item: ClipItem) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 8) {
+                Image(nsImage: image)
+                    .resizable().aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                // 图里识别出的文字 —— 搜索能命中它，所以要让用户看得见
+                if let ocr = model.ocrText(for: item) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Label("图中文字", systemImage: "text.viewfinder")
+                            .font(t.font(10)).foregroundStyle(.secondary)
+                        Text(ocr)
+                            .font(t.font(10))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
             }
-            .font(t.font(10))
-            .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(Capsule().fill(.primary.opacity(0.08)))
-            .contentShape(Capsule())
+            .padding(10)
         }
-        .buttonStyle(.plain)
-        .help(model.prettyJSON ? "显示复制时的原始文本" : "已识别为 JSON，点击格式化显示")
+        .frame(maxHeight: .infinity)
     }
+
+    private func textPane(_ item: ClipItem, label: String?, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let label {
+                Text(label)
+                    .font(t.font(9)).foregroundStyle(.tertiary)
+                    .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 2)
+            }
+            ScrollView {
+                Text(text)
+                    .font(t.font(11, design: item.kind == .code ? .monospaced : .default))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12).padding(.vertical, label == nil ? 12 : 4)
+            }
+        }
+        .frame(maxHeight: .infinity)
+    }
+
+    /// 下半区：处理结果 + 就地粘贴入口。
+    private func processedPane(_ item: ClipItem) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.turn.down.right").font(t.font(9))
+                Text(model.activeTransform?.title ?? "处理结果")
+                    .font(t.font(10, weight: .medium))
+                Spacer(minLength: 6)
+                Button { model.pasteTransformed() } label: {
+                    HStack(spacing: 3) {
+                        Text("粘贴这个")
+                        Text("⌘⏎").foregroundStyle(.tertiary)
+                    }
+                    .font(t.font(10))
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Capsule().fill(.primary.opacity(0.08)))
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .help("把处理结果粘出去，库里的原始内容不变")
+                Button { model.clearTransform() } label: {
+                    Image(systemName: "xmark").font(t.font(9))
+                }
+                .buttonStyle(.plain)
+                .help("收起处理结果")
+            }
+            .lineLimit(1)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12).padding(.vertical, 5)
+            .background(.quaternary.opacity(0.3))
+
+            ScrollView {
+                Text(model.processedText ?? "")
+                    .font(t.font(11, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+            }
+        }
+        .frame(maxHeight: .infinity)
+    }
+
+    // MARK: 变换入口
 
     /// 变换菜单入口。**变换只影响这一次粘贴，不改库里的原始内容。**
     private var transformButton: some View {
@@ -549,11 +594,53 @@ private struct PreviewPane: View {
             }
             .font(t.font(10))
             .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(Capsule().fill(.primary.opacity(0.08)))
+            .background(Capsule().fill(model.showTransforms
+                                       ? AnyShapeStyle(Color.accentColor.opacity(0.25))
+                                       : AnyShapeStyle(.primary.opacity(0.08))))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .help("换一种格式粘贴出去，原始内容不变")
+    }
+
+    /// 变换菜单。**是对选中条目的动作，不是独立工具箱** ——
+    /// 剪贴板管理器本来就站在复制与粘贴之间，在粘出去的路上转换是它天然该干的事。
+    /// 选中后只把结果放进下半区，**不直接粘出去**。
+    private var transformMenu: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("处理为…")
+                .font(t.font(10)).foregroundStyle(.secondary)
+                .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 4)
+            Divider()
+            ForEach(Array(model.availableTransforms.enumerated()), id: \.element.id) { _, tr in
+                Button {
+                    model.pickTransform(tr)
+                } label: {
+                    HStack(spacing: 8) {
+                        Text(tr.group.rawValue)
+                            .font(t.font(9))
+                            .foregroundStyle(.secondary)
+                            .frame(width: t.size(34), alignment: .leading)
+                        Text(tr.title).font(t.font(12))
+                        Spacer(minLength: 12)
+                        if model.activeTransform?.id == tr.id {
+                            Image(systemName: "checkmark").font(t.font(9))
+                        }
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            Divider()
+            Text("结果显示在下半区，确认后再粘贴")
+                .font(t.font(9)).foregroundStyle(.tertiary)
+                .padding(.horizontal, 10).padding(.vertical, 5)
+        }
+        .frame(width: t.size(230))
+        .background(RoundedRectangle(cornerRadius: 8).fill(.thickMaterial))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.primary.opacity(0.12)))
+        .shadow(radius: 12, y: 4)
     }
 }
 
@@ -695,4 +782,4 @@ private struct SearchField: NSViewRepresentable {
     }
 }
 
-enum KeyAction { case up, down, confirm, cancel, pick(Int), delete, pin, transform }
+enum KeyAction { case up, down, confirm, cancel, pick(Int), delete, pin, transform, pasteTransformed }

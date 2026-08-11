@@ -61,13 +61,18 @@ final class PanelModel: ObservableObject {
     /// 改成随选中项变化时算一次。
     @Published private(set) var availableTransforms: [Transformer] = []
 
-    /// 选中项是不是一段合法 JSON。预览头的徽章与「格式化」开关据此显示。
+    /// 选中项是不是一段合法 JSON。
     @Published private(set) var selectedIsJSON = false
-    /// 预览是否以格式化形式展示 JSON。开发者模式下默认开（省一次点击），
-    /// 但**任何人都能点头部那个开关切回原文** —— 不再是藏在设置里的隐形功能。
-    @Published var prettyJSON: Bool = ClipflowSettings.load().developerMode
+
+    /// 下半区正在展示的变换。nil = 预览只有原文一块。
+    @Published private(set) var activeTransform: Transformer?
+    /// 下半区展示用的文本（可能截断）。
+    @Published private(set) var processedText: String?
+    /// 真正用于粘贴的完整结果，不截断。
+    private var processedFull: String?
 
     private func refreshTransforms() {
+        clearTransform()
         guard let item = selectedItem else {
             availableTransforms = []; selectedIsJSON = false; return
         }
@@ -77,28 +82,45 @@ final class PanelModel: ObservableObject {
         }
         availableTransforms = transformers.applicable(to: text, developerMode: developerMode)
         selectedIsJSON = JSONDetector.looksLikeJSON(text)
-    }
 
-    /// 预览正文。识别为 JSON 且开着格式化时给格式化版本。
-    func displayText(for item: ClipItem) -> (text: String, isFormattedJSON: Bool) {
-        let raw = fullText(for: item)
-        guard prettyJSON, selectedIsJSON,
-              let pretty = JSONDetector.pretty(raw), pretty != raw else {
-            return (raw, false)
+        // JSON 直接把格式化结果摆进下半区 —— 这是它压倒性最常见的用途，
+        // 不该还要点一下才看得到。已经是格式化过的（结果和原文一样）就不占地方。
+        if selectedIsJSON, let pretty = availableTransforms.first(where: { $0.id == "json.pretty" }) {
+            setTransform(pretty, source: text, skipIfUnchanged: true)
         }
-        return (pretty, true)
     }
 
-    /// 应用变换并粘贴。变换只影响这一次粘贴，**不改库里的原始内容** ——
-    /// 保真是本项目的地基，原始数据不能被就地改写。
-    func applyTransform(_ t: Transformer) {
-        guard let item = selectedItem, let id = item.id else { return }
-        let source = fullText(for: item)
+    /// 选一个变换放进下半区。**不粘贴** —— 先让人看见结果，再决定要不要用。
+    /// 之前是点一下直接粘出去，看不到结果就得先粘了才知道对不对。
+    func pickTransform(_ t: Transformer) {
+        guard let item = selectedItem else { return }
+        showTransforms = false
+        setTransform(t, source: fullText(for: item), skipIfUnchanged: false)
+    }
+
+    /// - Parameter skipIfUnchanged: 自动挂上去的（JSON）在结果与原文相同时不显示；
+    ///   用户主动选的一律显示 —— 哪怕文本没变，「转为纯文本」变的是粘出去的格式，不是字。
+    private func setTransform(_ t: Transformer, source: String, skipIfUnchanged: Bool) {
         guard let out = try? t.apply(to: source) else {
             onError?("变换失败：\(t.title)")
             return
         }
-        showTransforms = false
+        guard !(skipIfUnchanged && out == source) else { return }
+        activeTransform = t
+        processedFull = out
+        processedText = out.count > 20_000 ? String(out.prefix(20_000)) + "\n\n…（已截断）" : out
+    }
+
+    func clearTransform() {
+        activeTransform = nil
+        processedText = nil
+        processedFull = nil
+    }
+
+    /// 粘贴下半区的处理结果。**只影响这一次粘贴，不改库里的原始内容** ——
+    /// 保真是本项目的地基，原始数据不能被就地改写。
+    func pasteTransformed() {
+        guard let item = selectedItem, let id = item.id, let out = processedFull else { return }
         try? store.touch(itemID: id)
         do {
             try paster.stage(representations: [("public.utf8-plain-text", Data(out.utf8), 0)])
@@ -259,7 +281,6 @@ final class PanelModel: ObservableObject {
         uiScale = s.uiScale
         if developerMode != s.developerMode {
             developerMode = s.developerMode
-            prettyJSON = s.developerMode
             refreshTransforms()
         }
         splitRatio = s.splitRatio
@@ -287,6 +308,10 @@ final class PanelModel: ObservableObject {
         case .transform:
             guard !availableTransforms.isEmpty else { return true }
             showTransforms.toggle(); return true
+        case .pasteTransformed:
+            // 没有处理结果时退化成普通粘贴，别让 ⌘⏎ 变成一个有时没反应的键
+            if processedFull != nil { pasteTransformed() } else { confirm() }
+            return true
         }
     }
 
