@@ -10,6 +10,9 @@ public enum ClipKind: Int, Codable, Sendable, CaseIterable, DatabaseValueConvert
     case fileRef = 4        // public.file-url —— 剪贴板天生只给路径（实测 200MB 视频 = 76 字节）
     case color = 5
     case code = 6
+    /// 合法 JSON。**单独一类而不是并进 code**：从网页/日志里抠 JSON 是高频动作，
+    /// 而且识别出来之后能直接给格式化，跟"看着像代码"不是一回事。
+    case json = 7
     case other = 99
 
     /// 供表格按列排序用
@@ -24,6 +27,7 @@ public enum ClipKind: Int, Codable, Sendable, CaseIterable, DatabaseValueConvert
         case .fileRef: return "文件"
         case .color: return "颜色"
         case .code: return "代码"
+        case .json: return "JSON"
         case .other: return "其他"
         }
     }

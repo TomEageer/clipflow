@@ -73,10 +73,14 @@ final class PanelModel: ObservableObject {
 
     private func refreshTransforms() {
         clearTransform()
+        clearEdits()
         guard let item = selectedItem else {
-            availableTransforms = []; selectedIsJSON = false; return
+            availableTransforms = []; selectedIsJSON = false
+            originalTruncated = false; return
         }
-        let text = fullText(for: item)
+        let info = fullTextInfo(for: item)
+        let text = info.text
+        originalTruncated = info.truncated
         guard !text.isEmpty, text.count < 500_000 else {
             availableTransforms = []; selectedIsJSON = false; return
         }
@@ -108,25 +112,114 @@ final class PanelModel: ObservableObject {
         guard !(skipIfUnchanged && out == source) else { return }
         activeTransform = t
         processedFull = out
-        processedText = out.count > 20_000 ? String(out.prefix(20_000)) + "\n\n…（已截断）" : out
+        processedTruncated = out.count > 20_000
+        processedText = processedTruncated ? String(out.prefix(20_000)) + "\n\n…（已截断）" : out
+        editedProcessed = nil
+        editingProcessed = false
     }
 
     func clearTransform() {
         activeTransform = nil
         processedText = nil
         processedFull = nil
+        processedTruncated = false
+        editedProcessed = nil
+        editingProcessed = false
     }
 
     /// 粘贴下半区的处理结果。**只影响这一次粘贴，不改库里的原始内容** ——
     /// 保真是本项目的地基，原始数据不能被就地改写。
     func pasteTransformed() {
-        guard let item = selectedItem, let id = item.id, let out = processedFull else { return }
+        guard let item = selectedItem, let id = item.id,
+              let out = editedProcessed ?? processedFull else { return }
         try? store.touch(itemID: id)
         do {
             try paster.stage(representations: [("public.utf8-plain-text", Data(out.utf8), 0)])
             onPaste?()
         } catch {
             onError?("\(error)")
+        }
+    }
+
+    // MARK: 面板内的临时编辑
+    //
+    // ⚠️ **永不写回数据库。** 保真是本项目的地基：库里存的必须永远是复制那一刻的原样。
+    // 这里的修改只作用于「这一次复制 / 粘贴」，切换选中项即丢弃 ——
+    // 所以改完格式化结果或原文，下次再打开这条还是原来的内容。
+
+    @Published var editedOriginal: String?
+    @Published var editingOriginal = false
+    @Published var editedProcessed: String?
+    @Published var editingProcessed = false
+    /// 内容过长时预览是**截断**的。此时必须禁止编辑 ——
+    /// 在截断视图上改完再粘出去，后面那截就永久没了。
+    @Published private(set) var originalTruncated = false
+    @Published private(set) var processedTruncated = false
+    /// 刚复制过哪一区，用来在按钮上给一下反馈（否则点了完全没动静）
+    @Published private(set) var copiedFlash: String?
+    private var flashTask: Task<Void, Never>?
+
+    var originalDisplayText: String {
+        editedOriginal ?? selectedItem.map { fullText(for: $0) } ?? ""
+    }
+    var processedDisplayText: String { editedProcessed ?? processedText ?? "" }
+    var isOriginalEdited: Bool { editedOriginal != nil }
+    var isProcessedEdited: Bool { editedProcessed != nil }
+
+    var originalBinding: Binding<String> {
+        Binding(get: { self.originalDisplayText }, set: { self.editedOriginal = $0 })
+    }
+    var processedBinding: Binding<String> {
+        Binding(get: { self.processedDisplayText }, set: { self.editedProcessed = $0 })
+    }
+
+    func revertOriginal() { editedOriginal = nil; editingOriginal = false }
+    func revertProcessed() { editedProcessed = nil; editingProcessed = false }
+
+    private func clearEdits() {
+        editedOriginal = nil; editingOriginal = false
+        editedProcessed = nil; editingProcessed = false
+        flashTask?.cancel(); copiedFlash = nil
+    }
+
+    /// 复制原文到系统剪贴板。**不粘贴、不关面板。**
+    ///
+    /// 没改动过就把**全部 representation** 一起复制 —— 富文本/HTML 都带上，保真；
+    /// 改动过就只有纯文本有意义（改过的字和原来的 html/rtf 已经对不上了）。
+    func copyOriginal() {
+        guard let item = selectedItem, let id = item.id else { return }
+        if let edited = editedOriginal {
+            copyPlain(edited, flash: "原文"); return
+        }
+        var payload: [(uti: String, data: Data, itemIndex: Int)] = []
+        if let reps = try? store.representations(of: id) {
+            for r in reps {
+                if let d = (try? store.data(of: r)) ?? nil, !d.isEmpty {
+                    payload.append((r.uti, d, r.itemIndex))
+                }
+            }
+        }
+        guard !payload.isEmpty else { return }
+        paster.copyOnly(representations: payload)
+        try? store.touch(itemID: id)
+        flash("原文")
+    }
+
+    func copyProcessed() { copyPlain(processedDisplayText, flash: "结果") }
+
+    private func copyPlain(_ s: String, flash label: String) {
+        guard !s.isEmpty else { return }
+        paster.copyOnly(representations: [("public.utf8-plain-text", Data(s.utf8), 0)])
+        flash(label)
+    }
+
+    private func flash(_ label: String) {
+        copiedFlash = label
+        flashTask?.cancel()
+        flashTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_400_000_000)
+            guard !Task.isCancelled else { return }
+            self?.copiedFlash = nil
         }
     }
 
@@ -140,7 +233,7 @@ final class PanelModel: ObservableObject {
     /// 缩略图内存缓存。磁盘缓存在 ThumbnailStore 里，这层避免滚动时反复读盘。
     private var thumbCache: [String: NSImage] = [:]
     private var largeCache: [String: NSImage] = [:]
-    private var textCache: [Int64: String] = [:]
+    private var textCache: [Int64: (text: String, truncated: Bool)] = [:]
     private var searchDebounce: Task<Void, Never>?
 
     var onClose: (() -> Void)?
@@ -222,8 +315,12 @@ final class PanelModel: ObservableObject {
     }
 
     /// 预览面板用的全文。preview 字段是截断过的，这里取真正的完整内容。
-    func fullText(for item: ClipItem) -> String {
-        guard let id = item.id else { return item.preview }
+    func fullText(for item: ClipItem) -> String { fullTextInfo(for: item).text }
+
+    /// - Returns: `truncated` 为真时视图里看到的不是全部内容 —— 此时**必须禁止编辑**，
+    ///   否则用户在截断视图上改完再粘出去，后面那截就没了。
+    func fullTextInfo(for item: ClipItem) -> (text: String, truncated: Bool) {
+        guard let id = item.id else { return (item.preview, false) }
         if let c = textCache[id] { return c }
         var text = item.preview
         if let reps = try? store.representations(of: id),
@@ -232,9 +329,13 @@ final class PanelModel: ObservableObject {
             text = s
         }
         // 别把 10MB 文本塞进视图
-        if text.count > 20_000 { text = String(text.prefix(20_000)) + "\n\n…（已截断）" }
-        textCache[id] = text
-        return text
+        var truncated = false
+        if text.count > 20_000 {
+            text = String(text.prefix(20_000)) + "\n\n…（已截断）"
+            truncated = true
+        }
+        textCache[id] = (text, truncated)
+        return (text, truncated)
     }
 
     /// 图片条目的 OCR 文本，用于预览面板展示"图里有什么字"
@@ -343,6 +444,17 @@ final class PanelModel: ObservableObject {
     /// 键盘焦点在面板上，必须先关面板，否则合成的 ⌘V 会打到面板自己身上。
     func confirm() {
         guard let item = selectedItem, let id = item.id else { return }
+
+        // 原文被改过就只粘改过的纯文本 —— 原来的 html/rtf 和改后的字已经对不上了，
+        // 一起粘出去接收方会取富文本那份，用户看到的还是没改的内容。
+        if let edited = editedOriginal {
+            try? store.touch(itemID: id)
+            do {
+                try paster.stage(representations: [("public.utf8-plain-text", Data(edited.utf8), 0)])
+                onPaste?()
+            } catch { onError?("读取失败：\(error)") }
+            return
+        }
 
         // ① 先取内容并写进剪贴板 —— 放在最前面，因为它最快且是兜底
         var payload: [(uti: String, data: Data, itemIndex: Int)] = []

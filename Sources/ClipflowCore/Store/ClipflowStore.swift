@@ -10,7 +10,8 @@ public final class ClipflowStore: Sendable {
     public let paths: StoragePaths
     public let blobs: BlobStore
     public let thumbnails: ThumbnailStore
-    private let contentPool: DatabasePool
+    /// internal 而非 private：JSON 回填在 ClipflowStore+ReclassifyJSON.swift 里要用
+    let contentPool: DatabasePool
     private let indexPool: DatabasePool
 
     public init(paths: StoragePaths) throws {

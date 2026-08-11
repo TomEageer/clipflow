@@ -44,12 +44,31 @@ public final class PasteboardWatcher: ClipSource, @unchecked Sendable {
         self.lastChangeCount = pasteboard.changeCount
     }
 
-    /// 自己写剪贴板后调用，抑制随之而来的那次变更
-    public func suppressNextChange() {
+    /// 自己写剪贴板后调用，抑制**自己那一次**变更。
+    ///
+    /// ⚠️ **只能抑制精确那一个 changeCount，绝不能"宽容"地多抑制几个。**
+    ///
+    /// 旧实现写的是 `for d in 0...2 { insert(c + d) }`，注释说"不保证精确，宽容记录附近几个值"。
+    /// 但 `c` 已经是写入**之后**读到的计数，就是我们自己那次；`c+1`、`c+2`
+    /// 是**用户接下来的两次复制** —— 于是从面板粘贴一次之后，用户再复制两次全被静默吞掉，
+    /// 内容永远进不了历史。实测复现：粘贴后连续复制 A/B/C/D，只有 C、D 入库。
+    ///
+    /// 精确抑制是安全的：`hasChanged()` 只比对**最新**的 changeCount，
+    /// 从不枚举中间值，所以写入路径即使内部自增多次，也只需抑制最终那一个。
+    public func suppress(changeCount: Int) {
         lock.lock(); defer { lock.unlock() }
-        // 写入后 changeCount 会 +1，但不保证精确，宽容记录附近几个值
-        let c = pasteboard.changeCount
-        for d in 0...2 { suppressedChangeCounts.insert(c + d) }
+        suppressedChangeCounts.insert(changeCount)
+        // 兜底：真出现抑制值一直没被消费掉的情况（写完剪贴板又被别人立刻改写），
+        // 别让集合无限长。留最近几个足够。
+        if suppressedChangeCounts.count > 8 {
+            suppressedChangeCounts = Set(suppressedChangeCounts.sorted().suffix(4))
+        }
+    }
+
+    /// 自己写剪贴板后调用，抑制随之而来的那次变更。
+    /// 调用方拿不到写入返回的 changeCount 时用这个 —— 读的是当下的值，仍然是精确一个。
+    public func suppressNextChange() {
+        suppress(changeCount: pasteboard.changeCount)
     }
 
     public func start() -> AsyncStream<RawSnapshot> {

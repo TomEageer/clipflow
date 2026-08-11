@@ -60,6 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         startCleanupSchedule()
         autoCheckUpdatesIfEnabled()
         startOCR()
+        backfillJSONKindOnce()
 
         // 演示模式：启动即在屏幕中央打开面板，供文档截图
         if ProcessInfo.processInfo.environment["CLIPFLOW_DEMO"] == "1" {
@@ -235,6 +236,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func openAccessibilitySettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
             NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// JSON 类型是这个版本才加的，之前攒下的 JSON 条目都被标成了文本/富文本。
+    /// 回填一次，让老条目也显示成 JSON。做完打标记，不重复跑。
+    private func backfillJSONKindOnce() {
+        let key = "com.tomeageer.clipflow.jsonBackfill.v1"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        guard let store = self.store else { return }
+        Task.detached(priority: .utility) {
+            let n = (try? store.reclassifyJSON()) ?? 0
+            UserDefaults.standard.set(true, forKey: key)
+            if n > 0 {
+                await MainActor.run { AppDelegate.current?.model.reload() }
+                print("JSON 回填：\(n) 条老条目改标为 JSON")
+            }
         }
     }
 

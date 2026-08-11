@@ -80,8 +80,9 @@ public final class Paster: @unchecked Sendable {
     /// representation —— 那是可能阻塞的操作，白白挡在粘贴路径上。
     public func stage(representations: [(uti: String, data: Data, itemIndex: Int)]) throws {
         guard !representations.isEmpty else { throw Failure.nothingToPaste }
-        writeToPasteboard(representations)
-        watcher?.suppressNextChange()
+        // 抑制值取自写入路径本身，不是事后再读一次 —— 中间要是被别的 App 插了一次写，
+        // 事后读到的就是别人那一次，抑制会打偏（把用户的复制吞掉、把自己的回声放进来）
+        watcher?.suppress(changeCount: writeToPasteboard(representations))
 
         // 写完立刻自检：接收方会用什么方式读，我们就用什么方式验
         let pb = NSPasteboard.general
@@ -152,10 +153,9 @@ public final class Paster: @unchecked Sendable {
         try pasteNow(waitingFor: nil)
     }
 
-    /// 只放进剪贴板，不合成按键。无权限时的降级路径。
+    /// 只放进剪贴板，不合成按键。无权限时的降级路径，也是面板里「复制」按钮走的路。
     public func copyOnly(representations: [(uti: String, data: Data, itemIndex: Int)]) {
-        writeToPasteboard(representations)
-        watcher?.suppressNextChange()
+        watcher?.suppress(changeCount: writeToPasteboard(representations))
     }
 
     /// 写回剪贴板。**必须还原原来的多 item 结构**。
@@ -163,7 +163,9 @@ public final class Paster: @unchecked Sendable {
     /// 复制多个文件时剪贴板上是多个 NSPasteboardItem，每个挂一个 public.file-url。
     /// 如果塞进同一个 item 反复 setData，同一 UTI 后者覆盖前者 —— 三个文件只剩一个。
     /// 实测：原生写法 `readObjects(forClasses:[NSURL])` 得到 2 个，拍平写法只得到 1 个。
-    private func writeToPasteboard(_ representations: [(uti: String, data: Data, itemIndex: Int)]) {
+    /// - Returns: 写完之后的 changeCount，交给 watcher 精确抑制这一次回声
+    @discardableResult
+    private func writeToPasteboard(_ representations: [(uti: String, data: Data, itemIndex: Int)]) -> Int {
         let pb = NSPasteboard.general
         pb.clearContents()
 
@@ -178,7 +180,7 @@ public final class Paster: @unchecked Sendable {
             }
             return item
         }
-        guard !items.isEmpty else { return }
+        guard !items.isEmpty else { return pb.changeCount }
         pb.writeObjects(items)
 
         // 文件条目额外补 NSFilenamesPboardType（老式路径）。
@@ -194,6 +196,7 @@ public final class Paster: @unchecked Sendable {
         if !paths.isEmpty {
             pb.setPropertyList(paths, forType: NSPasteboard.PasteboardType("NSFilenamesPboardType"))
         }
+        return pb.changeCount
     }
 
     /// 合成 Cmd+V。用 CGEvent 而非 AppleScript —— 更快且不依赖自动化权限。

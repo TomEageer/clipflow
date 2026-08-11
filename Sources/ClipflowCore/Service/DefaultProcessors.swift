@@ -110,7 +110,12 @@ public struct TypeClassifier: IngestProcessor {
         let plain = Self.text(from: snapshot, uti: "public.utf8-plain-text")
         context.preview = plain
 
-        if utis.contains("public.rtf") || utis.contains("public.html") {
+        // ⚠️ JSON 判定必须排在 richText **前面**。
+        // 从网页或日志里选中一段 JSON 复制，剪贴板上同时有 html/rtf，
+        // 先判 richText 的话这条就被标成"富文本"了 —— 用户看到的是「格式」而不是「JSON」。
+        if JSONDetector.looksLikeJSON(plain) {
+            context.kind = .json
+        } else if utis.contains("public.rtf") || utis.contains("public.html") {
             context.kind = .richText
         } else if plain.hasPrefix("http://") || plain.hasPrefix("https://") {
             context.kind = .url

@@ -47,5 +47,12 @@ let package = Package(
             dependencies: ["ClipflowCore"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        // 捕获层的测试单独一个 target：ClipflowCoreTests 里有一条硬禁 import AppKit
+        // 的约束测试，而这里必须碰 NSPasteboard。
+        .testTarget(
+            name: "ClipflowCaptureTests",
+            dependencies: ["ClipflowCapture", "ClipflowCore"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
     ]
 )

@@ -25,7 +25,7 @@ enum PanelCategory: String, CaseIterable, Identifiable {
         switch self {
         case .all:   return nil
         // 链接、代码、富文本、颜色本质都是文本，用户找的时候不会去想它们的区别
-        case .text:  return [.text, .richText, .code, .url, .color]
+        case .text:  return [.text, .richText, .code, .json, .url, .color]
         case .image: return [.image]
         case .file:  return [.fileRef]
         case .other: return [.other]

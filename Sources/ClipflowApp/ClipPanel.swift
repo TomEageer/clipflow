@@ -394,17 +394,40 @@ private struct SplitterHandle: NSViewRepresentable {
 
         override var mouseDownCanMoveWindow: Bool { false }
 
+        /// ⚠️ 光标形状必须**同时**走 cursor rect 和 mouseEntered/Exited 两条路。
+        ///
+        /// 只挂 `.cursorUpdate` tracking area 实测不生效：这块 NSView 活在
+        /// NSHostingView 里，SwiftUI 自己也装了 tracking area 并会把光标重置回箭头，
+        /// 谁最后一个设谁说了算。结果就是"鼠标划过分隔条没有 ↔ 提示，
+        /// 用户根本不知道这里能拖"。
+        ///
+        /// `addCursorRect` 由 AppKit 托管、进出自动配平，是主路径；
+        /// enter/exit 里再显式 set 一次兜底。**不用 push/pop** ——
+        /// 它要求严格配对，面板在悬停状态下直接关掉时收不到 exit，光标会卡住下不来。
+        override func resetCursorRects() {
+            addCursorRect(bounds, cursor: .resizeLeftRight)
+        }
+
         override func updateTrackingAreas() {
             super.updateTrackingAreas()
             trackingAreas.forEach(removeTrackingArea)
             addTrackingArea(NSTrackingArea(
                 rect: .zero,
-                options: [.activeAlways, .cursorUpdate, .inVisibleRect],
+                options: [.activeAlways, .cursorUpdate, .mouseEnteredAndExited, .inVisibleRect],
                 owner: self))
+            window?.invalidateCursorRects(for: self)
         }
 
         override func cursorUpdate(with event: NSEvent) {
             NSCursor.resizeLeftRight.set()
+        }
+
+        override func mouseEntered(with event: NSEvent) {
+            NSCursor.resizeLeftRight.set()
+        }
+
+        override func mouseExited(with event: NSEvent) {
+            NSCursor.arrow.set()
         }
 
         override func mouseDown(with event: NSEvent) {
@@ -462,12 +485,12 @@ private struct PreviewPane: View {
                         // 原来是靠一个「格式化 / 原文」开关来回切，看不到两者的对照，
                         // 而变换本身又是点一下直接粘出去 —— 等于粘了才知道结果对不对。
                         VStack(spacing: 0) {
-                            textPane(item, label: "原文", text: model.fullText(for: item))
+                            originalPane(item)
                             Divider()
                             processedPane(item)
                         }
                     } else {
-                        textPane(item, label: nil, text: model.fullText(for: item))
+                        originalPane(item)
                     }
 
                     Divider().opacity(0.4)
@@ -518,64 +541,161 @@ private struct PreviewPane: View {
         .frame(maxHeight: .infinity)
     }
 
-    private func textPane(_ item: ClipItem, label: String?, text: String) -> some View {
+    /// 上半区：原文。默认只读，点「编辑」才能改，改完可「复原」。
+    /// **编辑只影响这一次复制/粘贴，永不写回库。**
+    private func originalPane(_ item: ClipItem) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let label {
-                Text(label)
-                    .font(t.font(9)).foregroundStyle(.tertiary)
-                    .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 2)
-            }
-            ScrollView {
-                Text(text)
-                    .font(t.font(11, design: item.kind == .code ? .monospaced : .default))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12).padding(.vertical, label == nil ? 12 : 4)
-            }
+            paneHeader(
+                title: "原文",
+                icon: "doc.plaintext",
+                edited: model.isOriginalEdited,
+                canEdit: !model.originalTruncated,
+                editing: $model.editingOriginal,
+                copied: model.copiedFlash == "原文",
+                onCopy: { model.copyOriginal() },
+                onRevert: { model.revertOriginal() },
+                trailing: { EmptyView() })
+
+            paneBody(text: model.originalBinding,
+                     editing: model.editingOriginal,
+                     mono: item.kind == .code || item.kind == .json)
         }
         .frame(maxHeight: .infinity)
     }
 
-    /// 下半区：处理结果 + 就地粘贴入口。
+    /// 下半区：处理结果 + 就地粘贴入口。同样可编辑、可复原。
     private func processedPane(_ item: ClipItem) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
-                Image(systemName: "arrow.turn.down.right").font(t.font(9))
-                Text(model.activeTransform?.title ?? "处理结果")
-                    .font(t.font(10, weight: .medium))
-                Spacer(minLength: 6)
-                Button { model.pasteTransformed() } label: {
-                    HStack(spacing: 3) {
-                        Text("粘贴这个")
-                        Text("⌘⏎").foregroundStyle(.tertiary)
+            paneHeader(
+                title: model.activeTransform?.title ?? "处理结果",
+                icon: "arrow.turn.down.right",
+                edited: model.isProcessedEdited,
+                canEdit: !model.processedTruncated,
+                editing: $model.editingProcessed,
+                copied: model.copiedFlash == "结果",
+                onCopy: { model.copyProcessed() },
+                onRevert: { model.revertProcessed() },
+                trailing: {
+                    Button { model.pasteTransformed() } label: {
+                        HStack(spacing: 3) {
+                            Text("粘贴")
+                            Text("⌘⏎").foregroundStyle(.tertiary)
+                        }
+                        .font(t.font(10))
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Capsule().fill(.primary.opacity(0.08)))
+                        .contentShape(Capsule())
                     }
-                    .font(t.font(10))
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Capsule().fill(.primary.opacity(0.08)))
-                    .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .help("把处理结果粘出去，库里的原始内容不变")
-                Button { model.clearTransform() } label: {
-                    Image(systemName: "xmark").font(t.font(9))
-                }
-                .buttonStyle(.plain)
-                .help("收起处理结果")
-            }
-            .lineLimit(1)
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 12).padding(.vertical, 5)
-            .background(.quaternary.opacity(0.3))
+                    .buttonStyle(.plain)
+                    .help("把处理结果粘到刚才那个 App，库里的原始内容不变")
+                    Button { model.clearTransform() } label: {
+                        Image(systemName: "xmark").font(t.font(9))
+                    }
+                    .buttonStyle(.plain)
+                    .help("收起处理结果")
+                })
 
+            paneBody(text: model.processedBinding, editing: model.editingProcessed, mono: true)
+        }
+        .frame(maxHeight: .infinity)
+    }
+
+    /// 两个区共用的正文。只读态用 Text（可选中），编辑态换 TextEditor 并给个边框，
+    /// 让"现在能改"这件事一眼可见。
+    @ViewBuilder
+    private func paneBody(text: Binding<String>, editing: Bool, mono: Bool) -> some View {
+        if editing {
+            TextEditor(text: text)
+                .font(t.font(11, design: mono ? .monospaced : .default))
+                .scrollContentBackground(.hidden)
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .overlay(RoundedRectangle(cornerRadius: 5)
+                    .strokeBorder(Color.accentColor.opacity(0.55), lineWidth: 1))
+                .padding(6)
+        } else {
             ScrollView {
-                Text(model.processedText ?? "")
-                    .font(t.font(11, design: .monospaced))
+                Text(text.wrappedValue)
+                    .font(t.font(11, design: mono ? .monospaced : .default))
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 12).padding(.vertical, 8)
             }
         }
-        .frame(maxHeight: .infinity)
+    }
+
+    /// 两个区共用的标题栏。
+    ///
+    /// 按钮组必须能随预览列变窄降级 —— 预览最窄只有 220pt，
+    /// 挤五个带字的按钮必然折行变形（footer 已经踩过一次）。
+    @ViewBuilder
+    private func paneHeader<Trailing: View>(
+        title: String,
+        icon: String,
+        edited: Bool,
+        canEdit: Bool,
+        editing: Binding<Bool>,
+        copied: Bool,
+        onCopy: @escaping () -> Void,
+        onRevert: @escaping () -> Void,
+        @ViewBuilder trailing: () -> Trailing
+    ) -> some View {
+        let trailingView = trailing()
+        HStack(spacing: 6) {
+            Image(systemName: icon).font(t.font(9))
+            Text(title).font(t.font(10, weight: .medium))
+            if edited {
+                Text("已改（不写回库）")
+                    .font(t.font(9)).foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 6)
+
+            if edited {
+                iconButton("arrow.uturn.backward", "复原为原始内容", action: onRevert)
+            }
+            iconButton(editing.wrappedValue ? "checkmark.circle" : "pencil",
+                       canEdit ? (editing.wrappedValue ? "完成编辑" : "编辑（只影响这一次，不写回库）")
+                               : "内容过长已截断，不能编辑",
+                       disabled: !canEdit,
+                       active: editing.wrappedValue) { editing.wrappedValue.toggle() }
+
+            Button(action: onCopy) {
+                HStack(spacing: 3) {
+                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    Text(copied ? "已复制" : "复制")
+                }
+                .font(t.font(10))
+                .padding(.horizontal, 6).padding(.vertical, 2)
+                .background(Capsule().fill(copied ? AnyShapeStyle(Color.accentColor.opacity(0.25))
+                                                  : AnyShapeStyle(.primary.opacity(0.08))))
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("放进系统剪贴板 —— 不粘贴，也不关面板")
+
+            trailingView
+        }
+        .lineLimit(1)
+        .fixedSize(horizontal: false, vertical: true)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 12).padding(.vertical, 5)
+        .background(.quaternary.opacity(0.3))
+    }
+
+    private func iconButton(_ symbol: String, _ hint: String,
+                            disabled: Bool = false, active: Bool = false,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(t.font(10))
+                .frame(width: t.size(18), height: t.size(16))
+                .background(RoundedRectangle(cornerRadius: 4)
+                    .fill(active ? Color.accentColor.opacity(0.25) : Color.primary.opacity(0.06)))
+                .contentShape(RoundedRectangle(cornerRadius: 4))
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.35 : 1)
+        .help(hint)
     }
 
     // MARK: 变换入口
@@ -699,6 +819,7 @@ private struct RowView: View {
         case .fileRef: return "doc"
         case .url: return "link"
         case .code: return "chevron.left.forwardslash.chevron.right"
+        case .json: return "curlybraces"
         case .richText: return "textformat"
         case .color: return "paintpalette"
         default: return "text.alignleft"
