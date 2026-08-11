@@ -57,7 +57,14 @@ public struct ClipItem: Codable, Sendable, FetchableRecord, MutablePersistableRe
     /// 单调递增的"最近使用"序号。列表排序用它而不是 lastUsedAt ——
     /// 同一毫秒内的多次写入时间戳相同，排序会变成未定义。
     public var usedSeq: Int64
+    /// ⚠️ 作废字段，已被 `groupID` 取代（置顶本质就是"只有一个、还不能改名的分组"）。
+    /// 保留只因为 SQLite 删列要重建整表，为一个布尔位冒重建风险不划算。**不要再读写它。**
     public var pinned: Bool
+    /// 用户给这条起的名字。默认 nil —— 绝大多数条目不需要名字，
+    /// 强制命名等于给每次复制加负担。起了名的会进搜索索引，能直接搜名字找到。
+    public var name: String?
+    /// 所属自定义分组，nil = 未分组。**分组内的条目永不自动清理。**
+    public var groupID: Int64?
     public var sourceBundleID: String?
     public var sourceAppName: String?
     /// 需要 Accessibility 权限，沙盒下可能拿不到 —— 拿不到就留空，不阻塞入库
@@ -75,6 +82,8 @@ public struct ClipItem: Codable, Sendable, FetchableRecord, MutablePersistableRe
         useCount: Int = 0,
         usedSeq: Int64 = 0,
         pinned: Bool = false,
+        name: String? = nil,
+        groupID: Int64? = nil,
         sourceBundleID: String? = nil,
         sourceAppName: String? = nil,
         windowTitle: String? = nil,
@@ -90,6 +99,8 @@ public struct ClipItem: Codable, Sendable, FetchableRecord, MutablePersistableRe
         self.useCount = useCount
         self.usedSeq = usedSeq
         self.pinned = pinned
+        self.name = name
+        self.groupID = groupID
         self.sourceBundleID = sourceBundleID
         self.sourceAppName = sourceAppName
         self.windowTitle = windowTitle
@@ -103,6 +114,32 @@ public struct ClipItem: Codable, Sendable, FetchableRecord, MutablePersistableRe
     /// 表格排序用的非可选来源名。KeyPathComparator 对可选值的排序语义不直观，
     /// 给一个确定的字符串更可控。
     public var sourceLabel: String { sourceAppName ?? sourceBundleID ?? "" }
+
+    /// 列表主标题：起过名就显示名字，否则显示内容摘要。
+    public var displayTitle: String {
+        if let n = name, !n.isEmpty { return n }
+        return preview
+    }
+}
+
+/// 自定义分组。取代原来的「置顶」——置顶本质就是只有一个、还不能改名的分组。
+public struct ClipGroup: Codable, Sendable, FetchableRecord, MutablePersistableRecord,
+                         Identifiable, Equatable, Hashable {
+    public static let databaseTableName = "groups"
+
+    public var id: Int64?
+    public var name: String
+    public var sortOrder: Int
+    public var createdAt: Date
+
+    public init(id: Int64? = nil, name: String, sortOrder: Int = 0, createdAt: Date = Date()) {
+        self.id = id
+        self.name = name
+        self.sortOrder = sortOrder
+        self.createdAt = createdAt
+    }
+
+    public mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
 }
 
 /// 一个 representation = 剪贴板上的一种格式（public.rtf / public.html / public.png …）。

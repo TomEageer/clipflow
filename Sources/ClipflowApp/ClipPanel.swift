@@ -136,6 +136,7 @@ final class ClipPanel: NSPanel {
                 if c.isNumber, c != "0" { action = .pick(Int(String(c))! - 1) }
                 else if c == "p" { action = .pin }
                 else if c == "t" { action = .transform }
+                else if c == "r" { action = .rename }
             }
             if let action, self.onModifierKey?(action) == true { return nil }
             return event
@@ -281,19 +282,15 @@ struct ClipListView: View {
             }
     }
 
-    /// 分类切换。用原生分段控件，点击切换，不自动跳。
+    /// 分类切换。内置分类 + 自定义分组排在一条里。
+    ///
+    /// **不能用 segmented Picker**：分组数量不固定，分段控件会把每一段压到看不清，
+    /// 加到七八个分组时整条就废了。改成可横向滚动的胶囊条 ——
+    /// 装不下时两端出现 ◀ ▶ 翻页按钮，装得下就完全不出现，不白占地方。
     private var categoryBar: some View {
-        Picker("", selection: $model.category) {
-            ForEach(PanelCategory.allCases) { c in
-                let n = c.count(from: model.counts)
-                Text(n > 0 ? "\(c.label) \(n)" : c.label).tag(c)
-            }
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .controlSize(.small)
-        .padding(.horizontal, 10)
-        .padding(.bottom, 8)
+        CategoryBar(model: model, theme: t)
+            .padding(.horizontal, 10)
+            .padding(.bottom, 8)
     }
 
     private var searchBar: some View {
@@ -321,7 +318,8 @@ struct ClipListView: View {
         var h: [(String, String)] = [("↑↓", "选择"), ("⏎", "粘贴")]
         if model.processedText != nil { h.append(("⌘⏎", "粘处理结果")) }
         if !model.availableTransforms.isEmpty { h.append(("⌘T", "变换")) }
-        h.append(("⌘P", model.selectedIsPinned ? "取消置顶" : "置顶"))
+        h.append(("⌘P", model.selectedGroupName ?? "分组"))
+        h.append(("⌘R", "命名"))
         h.append(("⌘⌫", "删除"))
         return h
     }
@@ -457,7 +455,10 @@ private struct PreviewPane: View {
                 VStack(alignment: .leading, spacing: 0) {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 5) {
-                            if item.pinned { Image(systemName: "pin.fill").font(t.font(9)) }
+                            if let appIcon = SourceIcon.icon(forBundleID: item.sourceBundleID) {
+                                Image(nsImage: appIcon)
+                                    .resizable().frame(width: t.size(13), height: t.size(13))
+                            }
                             if item.sensitivity == .sensitive {
                                 Label("敏感", systemImage: "lock.fill")
                                     .font(t.font(10)).foregroundStyle(.orange)
@@ -468,11 +469,11 @@ private struct PreviewPane: View {
                             Spacer(minLength: 6)
                             // 动作入口放这里而不是只留快捷键 ——
                             // 变换功能之前只能靠 ⌘T 触发，等于没人知道它存在。
+                            groupButton
                             if !model.availableTransforms.isEmpty { transformButton }
                         }
                         .font(t.font(10)).foregroundStyle(.secondary)
-                        Text(item.createdAt.formatted(date: .abbreviated, time: .standard))
-                            .font(t.font(10)).foregroundStyle(.tertiary)
+                        nameRow(item)
                     }
                     .padding(.horizontal, 12).padding(.top, 11).padding(.bottom, 8)
 
@@ -505,6 +506,8 @@ private struct PreviewPane: View {
                 .overlay(alignment: .topTrailing) {
                     if model.showTransforms {
                         transformMenu.padding(.top, t.size(30)).padding(.trailing, 8)
+                    } else if model.showGroups {
+                        groupMenu.padding(.top, t.size(30)).padding(.trailing, 8)
                     }
                 }
             } else {
@@ -595,7 +598,9 @@ private struct PreviewPane: View {
                     .help("收起处理结果")
                 })
 
-            paneBody(text: model.processedBinding, editing: model.editingProcessed, mono: true)
+            // 处理结果**一直可编辑**，不设编辑开关：它本来就是派生数据，
+            // 改坏了点「复原」重算就行，没有"保护原始内容"的顾虑（原文那边才有）。
+            paneBody(text: model.processedBinding, editing: true, mono: true)
         }
         .frame(maxHeight: .infinity)
     }
@@ -700,6 +705,76 @@ private struct PreviewPane: View {
 
     // MARK: 变换入口
 
+    /// 命名行。默认没有名字 —— 绝大多数条目不需要，强制命名等于给每次复制加负担。
+    /// 起了名的会进搜索索引，能直接搜名字找到。
+    @ViewBuilder
+    private func nameRow(_ item: ClipItem) -> some View {
+        HStack(spacing: 5) {
+            if model.namingDraft != nil {
+                Image(systemName: "tag").font(t.font(9))
+                NameField(text: Binding(get: { model.namingDraft ?? "" },
+                                        set: { model.namingDraft = $0 }),
+                          fontSize: t.size(11),
+                          onCommit: { model.commitName() },
+                          onCancel: { model.cancelNaming() })
+                Text("⏎ 保存").font(t.font(9)).foregroundStyle(.tertiary)
+            } else if let n = item.name, !n.isEmpty {
+                Image(systemName: "tag.fill").font(t.font(9))
+                Text(n).font(t.font(11, weight: .medium)).foregroundStyle(.primary).lineLimit(1)
+                Button { model.beginNaming() } label: {
+                    Image(systemName: "pencil").font(t.font(9))
+                }
+                .buttonStyle(.plain).help("改名（⌘R）")
+                Button { model.namingDraft = ""; model.commitName() } label: {
+                    Image(systemName: "xmark").font(t.font(8))
+                }
+                .buttonStyle(.plain).help("清除名字")
+                Spacer(minLength: 4)
+                Text(item.createdAt.formatted(date: .abbreviated, time: .standard))
+                    .font(t.font(9)).foregroundStyle(.tertiary)
+            } else {
+                Text(item.createdAt.formatted(date: .abbreviated, time: .standard))
+                    .font(t.font(10)).foregroundStyle(.tertiary)
+                Button { model.beginNaming() } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "tag")
+                        Text("命名")
+                        Text("⌘R").foregroundStyle(.tertiary)
+                    }
+                    .font(t.font(9))
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Capsule().fill(.primary.opacity(0.07)))
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .help("起个名字，之后可以直接搜名字找到它")
+                Spacer(minLength: 4)
+            }
+        }
+        .lineLimit(1)
+        .foregroundStyle(.secondary)
+    }
+
+    /// 分组入口。取代原来的置顶 —— 置顶就是"只有一个、还不能改名的分组"。
+    private var groupButton: some View {
+        Button { model.showGroups.toggle(); model.showTransforms = false } label: {
+            HStack(spacing: 3) {
+                Image(systemName: model.selectedItem?.groupID == nil ? "folder" : "folder.fill")
+                Text(model.selectedGroupName ?? "分组")
+                Text("⌘P").foregroundStyle(.tertiary)
+            }
+            .font(t.font(10))
+            .lineLimit(1)
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(Capsule().fill(model.showGroups
+                                       ? AnyShapeStyle(Color.accentColor.opacity(0.25))
+                                       : AnyShapeStyle(.primary.opacity(0.08))))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help("放进自定义分组 —— 分组里的条目永不自动清理")
+    }
+
     /// 变换菜单入口。**变换只影响这一次粘贴，不改库里的原始内容。**
     private var transformButton: some View {
         Button { model.showTransforms.toggle() } label: {
@@ -717,6 +792,63 @@ private struct PreviewPane: View {
         }
         .buttonStyle(.plain)
         .help("换一种格式粘贴出去，原始内容不变")
+    }
+
+    /// 分组菜单。⌘P 或点预览头的分组按钮打开。
+    private var groupMenu: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("放进分组…")
+                .font(t.font(10)).foregroundStyle(.secondary)
+                .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 4)
+            Divider()
+            if model.groups.isEmpty {
+                Text("还没有分组")
+                    .font(t.font(11)).foregroundStyle(.tertiary)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+            }
+            ForEach(model.groups) { g in
+                Button { model.assignGroup(g.id) } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "folder").font(t.font(10)).foregroundStyle(.secondary)
+                        Text(g.name).font(t.font(12))
+                        Spacer(minLength: 12)
+                        if model.selectedItem?.groupID == g.id {
+                            Image(systemName: "checkmark").font(t.font(9))
+                        }
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            Divider()
+            if model.selectedItem?.groupID != nil {
+                Button { model.assignGroup(nil) } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "folder.badge.minus").font(t.font(10))
+                        Text("移出分组").font(t.font(12))
+                        Spacer(minLength: 12)
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            Button { model.createGroupAndAssign() } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "folder.badge.plus").font(t.font(10))
+                    Text("新建分组并放入").font(t.font(12))
+                    Spacer(minLength: 12)
+                }
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(width: t.size(220))
+        .background(RoundedRectangle(cornerRadius: 8).fill(.thickMaterial))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.primary.opacity(0.12)))
+        .shadow(radius: 12, y: 4)
     }
 
     /// 变换菜单。**是对选中条目的动作，不是独立工具箱** ——
@@ -786,10 +918,16 @@ private struct RowView: View {
             }
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(item.preview.replacingOccurrences(of: "\n", with: " "))
-                    .lineLimit(1).font(theme.font(12))
                 HStack(spacing: 4) {
-                    if item.pinned { Image(systemName: "pin.fill").font(.system(size: 7)) }
+                    // 起过名就以名字为主标题 —— 命名的意义就是"我要靠这个认出它"
+                    if item.name?.isEmpty == false {
+                        Image(systemName: "tag.fill").font(.system(size: 7))
+                    }
+                    Text(item.displayTitle.replacingOccurrences(of: "\n", with: " "))
+                        .lineLimit(1).font(theme.font(12))
+                }
+                HStack(spacing: 4) {
+                    if item.groupID != nil { Image(systemName: "folder.fill").font(.system(size: 7)) }
                     if item.sensitivity == .sensitive { Image(systemName: "lock.fill").font(.system(size: 7)) }
                     Text(item.sourceAppName ?? item.kind.label)
                     Text("·")
@@ -799,6 +937,14 @@ private struct RowView: View {
                 .foregroundStyle(selected ? Color.white.opacity(0.75) : .secondary)
             }
             Spacer(minLength: 4)
+            // 来源 App 图标。文字里已经有 App 名了，但图标一眼就能扫到，
+            // 找"刚才从 Chrome 复制的那条"时比读一遍名字快得多。
+            if let appIcon = SourceIcon.icon(forBundleID: item.sourceBundleID) {
+                Image(nsImage: appIcon)
+                    .resizable()
+                    .frame(width: theme.size(14), height: theme.size(14))
+                    .opacity(selected ? 1 : 0.85)
+            }
             if index < 9 {
                 Text("⌘\(index + 1)")
                     .font(theme.font(9, design: .rounded))
@@ -899,4 +1045,61 @@ private struct SearchField: NSViewRepresentable {
     }
 }
 
-enum KeyAction { case up, down, confirm, cancel, pick(Int), delete, pin, transform, pasteTransformed }
+enum KeyAction { case up, down, confirm, cancel, pick(Int), delete, pin, transform, pasteTransformed, rename }
+
+// MARK: 命名输入框
+
+/// 命名用的小输入框。
+///
+/// 和搜索框一样必须走 `control(_:textView:doCommandBy:)` —— NSTextField 获得焦点时
+/// 真正的 first responder 是它的 field editor，`keyDown` override 根本收不到
+/// （Esc 关不掉面板那次就是这么来的）。
+private struct NameField: NSViewRepresentable {
+    @Binding var text: String
+    var fontSize: CGFloat
+    var onCommit: () -> Void
+    var onCancel: () -> Void
+
+    func makeNSView(context: Context) -> NSTextField {
+        let tf = NSTextField()
+        tf.placeholderString = "给这条起个名字…"
+        tf.isBordered = false
+        tf.drawsBackground = true
+        tf.backgroundColor = .textBackgroundColor
+        tf.focusRingType = .none
+        tf.font = .systemFont(ofSize: fontSize)
+        tf.delegate = context.coordinator
+        tf.stringValue = text
+        DispatchQueue.main.async { tf.window?.makeFirstResponder(tf) }
+        return tf
+    }
+
+    func updateNSView(_ v: NSTextField, context: Context) {
+        context.coordinator.parent = self
+        if v.stringValue != text { v.stringValue = text }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: NameField
+        init(_ p: NameField) { parent = p }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let tf = obj.object as? NSTextField else { return }
+            parent.text = tf.stringValue
+        }
+
+        func control(_ control: NSControl, textView: NSTextView,
+                     doCommandBy selector: Selector) -> Bool {
+            switch selector {
+            case #selector(NSResponder.insertNewline(_:)):
+                parent.onCommit(); return true
+            case #selector(NSResponder.cancelOperation(_:)):
+                parent.onCancel(); return true
+            default:
+                return false
+            }
+        }
+    }
+}

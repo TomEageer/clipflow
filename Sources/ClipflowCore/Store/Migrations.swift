@@ -79,6 +79,40 @@ public enum Migrations {
             }
         }
 
+        // 命名 + 自定义分组。
+        //
+        // 「置顶」被分组取代：置顶本质就是"只有一个、还不能改名的分组"。
+        // 已经置顶的条目搬进一个叫「置顶」的分组，**功能和数据都不丢** ——
+        // 直接把 pinned 作废会让用户辛苦标的东西一夜消失。
+        //
+        // pinned 列保留但不再使用：SQLite 删列要重建整表，为一个作废的布尔位
+        // 冒重建风险不划算。所有读写路径改看 groupID。
+        m.registerMigration("v4_names_and_groups") { db in
+            try db.create(table: "groups") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("name", .text).notNull()
+                t.column("sortOrder", .integer).notNull().defaults(to: 0)
+                t.column("createdAt", .datetime).notNull()
+            }
+            try db.alter(table: "items") { t in
+                t.add(column: "name", .text)          // 用户起的名字，默认没有
+                t.add(column: "groupID", .integer)    // 所属自定义分组，NULL = 未分组
+            }
+            try db.create(index: "idx_items_group", on: "items",
+                          columns: ["groupID", "usedSeq"])
+
+            let pinnedCount = try Int.fetchOne(
+                db, sql: "SELECT count(*) FROM items WHERE pinned = 1") ?? 0
+            if pinnedCount > 0 {
+                try db.execute(sql: """
+                    INSERT INTO groups (name, sortOrder, createdAt) VALUES ('置顶', 0, ?)
+                    """, arguments: [Date()])
+                let gid = db.lastInsertedRowID
+                try db.execute(sql: "UPDATE items SET groupID = ? WHERE pinned = 1",
+                               arguments: [gid])
+            }
+        }
+
         return m
     }
 

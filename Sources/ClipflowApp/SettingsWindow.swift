@@ -123,10 +123,10 @@ final class SettingsModel: ObservableObject {
         lastAction = "已删除 \(n) 条"
     }
 
-    func deleteAll(keepPinned: Bool) {
-        let n = (try? store.deleteAll(keepPinned: keepPinned)) ?? 0
+    func deleteAll(keepGrouped: Bool) {
+        let n = (try? store.deleteAll(keepGrouped: keepGrouped)) ?? 0
         refresh()
-        lastAction = "已清空 \(n) 条\(keepPinned ? "（置顶已保留）" : "")"
+        lastAction = "已清空 \(n) 条\(keepGrouped ? "（已分组的保留）" : "")"
     }
 
     /// 按当前设置清理 + 回收孤儿 blob
@@ -384,10 +384,10 @@ private struct HistoryTab: View {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(item.preview.replacingOccurrences(of: "\n", with: " "))
                                 .lineLimit(1)
-                            if item.pinned || item.sensitivity == .sensitive {
+                            if item.groupID != nil || item.sensitivity == .sensitive {
                                 HStack(spacing: 5) {
-                                    if item.pinned {
-                                        Label("置顶", systemImage: "pin.fill")
+                                    if item.groupID != nil {
+                                        Label("已分组", systemImage: "folder.fill")
                                     }
                                     if item.sensitivity == .sensitive {
                                         Label("敏感", systemImage: "lock.fill")
@@ -485,8 +485,8 @@ private struct HistoryTab: View {
             .help("删除选中的 \(model.selected.count) 条")
 
             Menu {
-                Button("清空全部（保留置顶）") { model.deleteAll(keepPinned: true) }
-                Button("清空全部（含置顶）", role: .destructive) { model.deleteAll(keepPinned: false) }
+                Button("清空全部（保留已分组）") { model.deleteAll(keepGrouped: true) }
+                Button("清空全部（含已分组）", role: .destructive) { model.deleteAll(keepGrouped: false) }
             } label: {
                 Label("清空", systemImage: "trash.slash")
             }

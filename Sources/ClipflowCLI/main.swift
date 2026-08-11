@@ -82,7 +82,7 @@ func printItems(_ items: [ClipItem]) {
     if items.isEmpty { print("（无结果）"); return }
     for it in items {
         let id = it.id.map(String.init) ?? "-"
-        let pin = it.pinned ? "*" : " "
+        let pin = it.groupID != nil ? "*" : " "
         let sens = it.sensitivity == .sensitive ? "!" : " "
         let app = it.sourceAppName ?? it.sourceBundleID ?? "-"
         print("\(pin)\(sens)#\(id.padding(toLength: max(5, id.count), withPad: " ", startingAt: 0)) "

@@ -247,7 +247,84 @@ final class PanelModel: ObservableObject {
     var selectedItem: ClipItem? {
         selection < items.count ? items[selection] : nil
     }
-    var selectedIsPinned: Bool { selectedItem?.pinned ?? false }
+    // MARK: 自定义分组
+    //
+    // 取代原来的「置顶」——置顶本质就是只有一个、还不能改名的分组。
+    // **已分组的条目永不自动清理**，这条保护从 pinned 平移过来了。
+
+    @Published private(set) var groups: [ClipGroup] = []
+    @Published private(set) var groupCounts: [Int64: Int] = [:]
+    /// 分组菜单是否展开
+    @Published var showGroups = false
+    /// 正在改名的分组 id（nil = 没在改名）
+    @Published var renamingGroup: Int64?
+
+    var selectedGroupName: String? {
+        guard let g = selectedItem?.groupID else { return nil }
+        return groups.first { $0.id == g }?.name
+    }
+
+    func reloadGroups() {
+        groups = (try? store.groups()) ?? []
+        groupCounts = (try? store.countsByGroup()) ?? [:]
+    }
+
+    /// 把选中条目放进分组；传 nil 移出
+    func assignGroup(_ id: Int64?) {
+        guard let item = selectedItem, let itemID = item.id else { return }
+        try? store.setGroup(id, itemID: itemID)
+        showGroups = false
+        reload()
+    }
+
+    /// 只建分组、不放东西（分类条上的 + 按钮）
+    func createGroup() {
+        let n = (try? store.createGroup(name: "分组 \(groups.count + 1)")) ?? nil
+        reloadGroups()
+        renamingGroup = n
+    }
+
+    func createGroupAndAssign() {
+        let n = (try? store.createGroup(name: "分组 \(groups.count + 1)")) ?? nil
+        reloadGroups()
+        if let n { assignGroup(n) } else { showGroups = false }
+        // 新建完直接进改名态 —— 没人想留着「分组 3」这个名字
+        renamingGroup = n
+    }
+
+    func renameGroup(_ id: Int64, to name: String) {
+        try? store.renameGroup(id, to: name)
+        renamingGroup = nil
+        reloadGroups()
+    }
+
+    /// 删除分组。**只解绑，不删条目。**
+    func deleteGroup(_ id: Int64) {
+        try? store.deleteGroup(id)
+        if category.groupID == id { category = .all }
+        reloadGroups()
+        reload()
+    }
+
+    // MARK: 命名
+    //
+    // 默认没有名字 —— 绝大多数条目不需要，强制命名等于给每次复制加负担。
+    // 起了名的会进搜索索引，能直接搜名字找到。
+
+    @Published var namingDraft: String?
+
+    func beginNaming() {
+        namingDraft = selectedItem?.name ?? ""
+    }
+
+    func commitName() {
+        defer { namingDraft = nil }
+        guard let draft = namingDraft, let id = selectedItem?.id else { return }
+        try? store.setName(draft, itemID: id)
+        reload()
+    }
+
+    func cancelNaming() { namingDraft = nil }
 
     // MARK: 加载
 
@@ -269,15 +346,19 @@ final class PanelModel: ObservableObject {
             // 选中项被重置回第一条，是很打断人的
             let keepID = selectedItem?.id
             let kinds = category.kinds
+            let gid = category.groupID
             if q.isEmpty {
-                items = try store.recent(limit: 200, kinds: kinds)
+                items = try store.recent(limit: 200, kinds: kinds, groupID: gid)
             } else {
                 // 搜索结果再按分类筛。搜索已限量，客户端筛的代价可忽略。
                 let hits = try store.search(q, limit: 400)
-                items = kinds.map { k in hits.filter { k.contains($0.kind) } } ?? hits
+                var filtered = kinds.map { k in hits.filter { k.contains($0.kind) } } ?? hits
+                if let gid { filtered = filtered.filter { $0.groupID == gid } }
+                items = filtered
                 if items.count > 200 { items = Array(items.prefix(200)) }
             }
             counts = (try? store.countsByKind()) ?? [:]
+            reloadGroups()
             total = try store.count()
             if let keepID, let idx = items.firstIndex(where: { $0.id == keepID }) {
                 selection = idx
@@ -285,6 +366,7 @@ final class PanelModel: ObservableObject {
                 selection = 0
             }
             showTransforms = false
+            showGroups = false
             refreshTransforms()
             if thumbCache.count > 300 { thumbCache.removeAll(keepingCapacity: true) }
             if largeCache.count > 12 { largeCache.removeAll(keepingCapacity: true) }
@@ -373,6 +455,8 @@ final class PanelModel: ObservableObject {
         guard i >= 0, i < items.count, i != selection else { return }
         selection = i
         showTransforms = false
+        showGroups = false
+        namingDraft = nil
         refreshTransforms()
         if source == .keyboard { scrollToken += 1 }
     }
@@ -399,16 +483,21 @@ final class PanelModel: ObservableObject {
         case .confirm:  confirm(); return true
         case .cancel:
             // 变换菜单开着时，esc 先关它，再按才关面板 —— 逐层退出符合直觉
-            if showTransforms { showTransforms = false } else { onClose?() }
+            if namingDraft != nil { cancelNaming() }
+            else if showTransforms { showTransforms = false }
+            else if showGroups { showGroups = false }
+            else { onClose?() }
             return true
         case .pick(let i):
             guard i < items.count else { return true }
             select(i, from: .keyboard); confirm(); return true
-        case .pin:      togglePin(); return true
+        case .pin:      toggleGroupMenu(); return true
         case .delete:   deleteSelected(); return true
         case .transform:
             guard !availableTransforms.isEmpty else { return true }
             showTransforms.toggle(); return true
+        case .rename:
+            beginNaming(); return true
         case .pasteTransformed:
             // 没有处理结果时退化成普通粘贴，别让 ⌘⏎ 变成一个有时没反应的键
             if processedFull != nil { pasteTransformed() } else { confirm() }
@@ -416,10 +505,10 @@ final class PanelModel: ObservableObject {
         }
     }
 
-    private func togglePin() {
-        guard let item = selectedItem, let id = item.id else { return }
-        try? store.setPinned(!item.pinned, itemID: id)
-        reload()
+    /// ⌘P 现在打开分组菜单（原来是置顶）。快捷键沿用，肌肉记忆不丢。
+    private func toggleGroupMenu() {
+        showGroups.toggle()
+        showTransforms = false
     }
 
     private func deleteSelected() {

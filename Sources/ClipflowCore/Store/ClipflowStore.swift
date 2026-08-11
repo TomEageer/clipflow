@@ -82,6 +82,7 @@ public final class ClipflowStore: Sendable {
 
         // 敏感条目不入索引 —— 索引里存的 bigram 分词拼起来接近原文，等于明文泄漏
         if item.sensitivity == .normal {
+            // 名字也要进索引（入库时还没有名字，重命名时走 reindex 补）
             try indexFTS(itemID: newID, text: item.preview)
         }
         return newID
@@ -115,20 +116,27 @@ public final class ClipflowStore: Sendable {
     ///
     /// **恒定按时间排，绝不 ORDER BY rank。**
     public func recent(limit: Int = 50, offset: Int = 0,
-                       kinds: Set<ClipKind>? = nil) throws -> [ClipItem] {
+                       kinds: Set<ClipKind>? = nil,
+                       groupID: Int64? = nil) throws -> [ClipItem] {
         try contentPool.read { db in
-            guard let kinds, !kinds.isEmpty else {
-                return try ClipItem.fetchAll(db, sql: """
-                    SELECT * FROM items ORDER BY pinned DESC, usedSeq DESC LIMIT ? OFFSET ?
-                    """, arguments: [limit, offset])
-            }
             // 过滤放进 SQL 而不是取回来再筛 —— 否则"最近 200 条里只有 3 张图"时
             // 用户会以为图片没了
-            let marks = databaseQuestionMarks(count: kinds.count)
-            let args: [any DatabaseValueConvertible] = kinds.map(\.rawValue) + [limit, offset]
+            var where_ = "1 = 1"
+            var args: [any DatabaseValueConvertible] = []
+            if let kinds, !kinds.isEmpty {
+                where_ += " AND kind IN (\(databaseQuestionMarks(count: kinds.count)))"
+                args += kinds.map(\.rawValue)
+            }
+            if let groupID {
+                where_ += " AND groupID = ?"
+                args.append(groupID)
+            }
+            args += [limit, offset]
+            // 排序不再看 pinned：置顶已经被分组取代，分组有自己的标签页，
+            // 再让它们插队到「全部」顶部只会让最近复制的东西找不着。
             return try ClipItem.fetchAll(db, sql: """
-                SELECT * FROM items WHERE kind IN (\(marks))
-                ORDER BY pinned DESC, usedSeq DESC LIMIT ? OFFSET ?
+                SELECT * FROM items WHERE \(where_)
+                ORDER BY usedSeq DESC LIMIT ? OFFSET ?
                 """, arguments: StatementArguments(args))
         }
     }
@@ -141,14 +149,6 @@ public final class ClipflowStore: Sendable {
                 if let k = ClipKind(rawValue: row["kind"] as Int) { out[k] = row["c"] as Int }
             }
             return out
-        }
-    }
-
-    /// 置顶 / 取消置顶
-    public func setPinned(_ pinned: Bool, itemID: Int64) throws {
-        try contentPool.write { db in
-            try db.execute(sql: "UPDATE items SET pinned = ? WHERE id = ?",
-                           arguments: [pinned, itemID])
         }
     }
 
@@ -267,7 +267,7 @@ public final class ClipflowStore: Sendable {
     func deleteOldestBeyond(limit: Int) throws -> Int {
         let ids: [Int64] = try contentPool.read { db in
             try Int64.fetchAll(db, sql: """
-                SELECT id FROM items WHERE pinned = 0
+                SELECT id FROM items WHERE groupID IS NULL
                 ORDER BY usedSeq DESC LIMIT -1 OFFSET ?
                 """, arguments: [limit])
         }
@@ -279,7 +279,7 @@ public final class ClipflowStore: Sendable {
     func deleteOldestBatch(count: Int) throws -> Int {
         let ids: [Int64] = try contentPool.read { db in
             try Int64.fetchAll(db, sql: """
-                SELECT id FROM items WHERE pinned = 0 ORDER BY usedSeq ASC LIMIT ?
+                SELECT id FROM items WHERE groupID IS NULL ORDER BY usedSeq ASC LIMIT ?
                 """, arguments: [count])
         }
         guard !ids.isEmpty else { return 0 }
@@ -300,10 +300,11 @@ public final class ClipflowStore: Sendable {
         }
     }
 
-    /// 清空全部（保留置顶的选项）
+    /// 清空全部。`keepGrouped` 为真时不动已分组的条目 ——
+    /// 用户明确归过类的东西不能被一键清空顺手带走。
     @discardableResult
-    public func deleteAll(keepPinned: Bool = true) throws -> Int {
-        try deleteWhere(keepPinned ? "pinned = 0" : "1 = 1", [])
+    public func deleteAll(keepGrouped: Bool = true) throws -> Int {
+        try deleteWhere(keepGrouped ? "groupID IS NULL" : "1 = 1", [])
     }
 
     func allBlobHashes() throws -> [String] {
@@ -358,7 +359,7 @@ public final class ClipflowStore: Sendable {
         let whereSQL = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
         return try contentPool.read { db in
             try ClipItem.fetchAll(db, sql:
-                "SELECT * FROM items \(whereSQL) ORDER BY pinned DESC, \(sort.sql) LIMIT ?",
+                "SELECT * FROM items \(whereSQL) ORDER BY \(sort.sql) LIMIT ?",
                 arguments: StatementArguments(args + [limit]))
         }
     }

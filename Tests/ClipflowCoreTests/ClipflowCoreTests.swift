@@ -609,20 +609,54 @@ struct ListBehaviorTests {
         #expect(try store.recent().first?.preview == "第一条")
     }
 
-    @Test("置顶的条目永远排在最前")
-    func pinnedFirst() throws {
+    /// 分组取代了置顶：分组有自己的标签页，**不再插队到「全部」顶部** ——
+    /// 那样会把用户刚复制的东西挤下去，反而更难找。
+    @Test("分组条目不插队，但按分组能单独筛出来")
+    func groupFiltering() throws {
         let (store, dir) = try tempStore()
         defer { try? FileManager.default.removeItem(at: dir) }
         let ingest = IngestService(store: store)
         let old = try #require(try ingest.ingest(snap("很老的条目")))
         for i in 0..<5 { try ingest.ingest(snap("后来的 \(i)")) }
-        #expect(try store.recent().first?.preview != "很老的条目")
 
-        try store.setPinned(true, itemID: old)
-        #expect(try store.recent().first?.preview == "很老的条目")
+        let g = try store.createGroup(name: "常用")
+        try store.setGroup(g, itemID: old)
 
-        try store.setPinned(false, itemID: old)
+        // 「全部」里仍按最近排，不因为分组而插队
         #expect(try store.recent().first?.preview != "很老的条目")
+        // 切到分组只剩它
+        let inGroup = try store.recent(groupID: g)
+        #expect(inGroup.count == 1)
+        #expect(inGroup.first?.preview == "很老的条目")
+        #expect(try store.countsByGroup()[g] == 1)
+
+        // 删分组只解绑，**不删条目** —— 一次误点不能连内容一起没掉
+        try store.deleteGroup(g)
+        #expect(try store.groups().isEmpty)
+        #expect(try store.recent().count == 6)
+    }
+
+    @Test("命名后能直接搜名字找到")
+    func searchByName() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        let id = try #require(try ingest.ingest(snap("aGVsbG8gd29ybGQK")))
+
+        // 起名前，搜名字搜不到
+        #expect(try store.search("生产库密钥").isEmpty)
+
+        try store.setName("生产库密钥", itemID: id)
+        let hits = try store.search("生产库密钥")
+        #expect(hits.count == 1, "起了名却搜不到 —— setName 忘了重建 FTS 行")
+        #expect(hits.first?.name == "生产库密钥")
+        // 原内容仍然能搜到，改名不该把原来的索引冲掉
+        #expect(try store.search("aGVsbG8").count == 1)
+
+        // 清除名字后又搜不到了
+        try store.setName(nil, itemID: id)
+        #expect(try store.search("生产库密钥").isEmpty)
+        #expect(try store.search("aGVsbG8").count == 1)
     }
 }
 
@@ -750,16 +784,18 @@ struct CleanupTests {
         RawSnapshot(representations: [("public.utf8-plain-text", Data(t.utf8), 0)])
     }
 
-    /// 置顶条目永不自动清理 —— 用户明确表示要留着的东西不能悄悄删掉
-    @Test("置顶条目不被保留期清理")
-    func pinnedSurvivesRetention() throws {
+    /// 已分组的条目永不自动清理 —— 用户明确归过类的东西不能悄悄删掉。
+    /// （这条保护原来挂在 pinned 上，置顶被分组取代后必须跟着平移过来。）
+    @Test("已分组的条目不被保留期清理")
+    func groupedSurvivesRetention() throws {
         let (store, dir) = try tempStore()
         defer { try? FileManager.default.removeItem(at: dir) }
         let ingest = IngestService(store: store)
 
-        let pinned = try #require(try ingest.ingest(snap("要留着的")))
+        let kept = try #require(try ingest.ingest(snap("要留着的")))
         try ingest.ingest(snap("会被清掉的"))
-        try store.setPinned(true, itemID: pinned)
+        let g = try store.createGroup(name: "常用")
+        try store.setGroup(g, itemID: kept)
 
         var s = ClipflowSettings()
         s.retention = .days7

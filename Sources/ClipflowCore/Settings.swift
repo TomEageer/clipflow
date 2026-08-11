@@ -110,7 +110,8 @@ extension ClipflowStore {
     /// 按设置清理过期与超量内容。
     ///
     /// 顺序有意义：先按时间清（语义最明确），再按数量/体积兜底。
-    /// 置顶条目**永不自动清理** —— 用户明确表示要留着的东西不能悄悄删掉。
+    /// **已分组的条目永不自动清理** —— 用户明确归过类的东西不能悄悄删掉。
+    /// （原来是置顶条目受保护，置顶已被分组取代。）
     @discardableResult
     public func cleanup(settings: ClipflowSettings, now: Date = Date()) throws -> CleanupResult {
         var r = CleanupResult()
@@ -123,13 +124,13 @@ extension ClipflowStore {
         case .seconds60, .minutes10, .hours1:
             let cutoff = now.addingTimeInterval(-Double(settings.sensitiveTTL.rawValue))
             r.bySensitiveTTL = try deleteWhere(
-                "sensitivity = 1 AND pinned = 0 AND createdAt < ?", [cutoff])
+                "sensitivity = 1 AND groupID IS NULL AND createdAt < ?", [cutoff])
         }
 
         // ② 保留期
         if settings.retention != .forever {
             let cutoff = now.addingTimeInterval(-Double(settings.retention.rawValue) * 86400)
-            r.byRetention = try deleteWhere("pinned = 0 AND lastUsedAt < ?", [cutoff])
+            r.byRetention = try deleteWhere("groupID IS NULL AND lastUsedAt < ?", [cutoff])
         }
 
         // ③ 条目数上限：淘汰最久未用的
