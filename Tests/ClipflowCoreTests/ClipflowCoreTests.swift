@@ -1579,3 +1579,76 @@ struct SettingsDecodingTests {
         #expect(back == s)
     }
 }
+
+// MARK: - SQL 识别
+
+@Suite("SQL 识别")
+struct SQLDetectorTests {
+
+    @Test("常见语句都能认出来")
+    func positives() {
+        let cases = [
+            "SELECT * FROM users WHERE id = 1",
+            "select id, name from t_order where status = 5 and is_delete = 0",
+            "UPDATE TrainOrder202607 SET Status = 11, StatusName = '已退款' WHERE OrderID = 'X'",
+            "INSERT INTO `FormEngineDB`.`FormConfig0` (a, b) VALUES (1, 2)",
+            "DELETE FROM logs WHERE created_at < '2026-01-01'",
+            "CREATE TABLE t (id INT PRIMARY KEY, name VARCHAR(64))",
+            "ALTER TABLE t ADD COLUMN c INT",
+            "DROP INDEX idx_a ON t",
+            "TRUNCATE TABLE staging",
+            "WITH x AS (SELECT 1 AS a) SELECT * FROM x",
+            "EXPLAIN SELECT * FROM t",
+            "-- 上线前跑一遍\nSELECT count(*) FROM orders",
+            "/* 批量修数 */ UPDATE t SET a = 1 WHERE b = 2",
+            "SELECT 1 WHERE 1 = 1",
+        ]
+        for c in cases {
+            #expect(SQLDetector.looksLikeSQL(c), "没认出来：\(c.prefix(40))")
+        }
+    }
+
+    /// 光看首关键字会把这些全误判成 SQL —— 必配子句这一层就是防它们的
+    @Test("像 SQL 的英文/中文句子不能误判")
+    func negatives() {
+        let cases = [
+            "Update the docs before you ship",
+            "select 一下这个方案再定",
+            "Delete these files when you get a chance",
+            "创建一个新的分组",
+            "insert coin to continue",
+            "drop me a message",
+            "SELECT",
+            "",
+            "https://github.com/TomEageer/clipflow",
+            #"{"sql": "SELECT * FROM t"}"#,          // 是 JSON 不是 SQL
+            "let rows = db.select(from: table)",     // 首词不是关键字
+        ]
+        for c in cases {
+            #expect(!SQLDetector.looksLikeSQL(c), "误判成 SQL：\(c.prefix(40))")
+        }
+    }
+
+    /// 括号/引号不配平说明这段是被截断或抠错了，不该算"结构合法"
+    @Test("括号引号不配平判不通过")
+    func unbalanced() {
+        #expect(!SQLDetector.looksLikeSQL("SELECT * FROM t WHERE a IN (1, 2"))
+        #expect(!SQLDetector.looksLikeSQL("SELECT * FROM t WHERE name = 'abc"))
+        #expect(!SQLDetector.looksLikeSQL("INSERT INTO t (a, b VALUES (1, 2)"))
+    }
+
+    /// 字符串字面量里的括号不算数，转义引号也要认
+    @Test("引号内的括号与转义引号不影响配平")
+    func quoteAware() {
+        #expect(SQLDetector.looksLikeSQL("SELECT * FROM t WHERE name = '张三)'"))
+        #expect(SQLDetector.looksLikeSQL("UPDATE t SET a = 'it''s ok' WHERE b = 1"))
+        #expect(SQLDetector.looksLikeSQL("SELECT * FROM `db`.`tbl` WHERE x = \"a(b\""))
+    }
+
+    /// 整词匹配：FORMAT 里含 FROM 之类不能算命中
+    @Test("伴随关键字必须整词匹配")
+    func wholeWordOnly() {
+        #expect(!SQLDetector.looksLikeSQL("SELECT FORMATTED VALUES"))
+        #expect(SQLDetector.looksLikeSQL("SELECT a FROM b"))
+    }
+}

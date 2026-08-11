@@ -13,6 +13,8 @@ public enum ClipKind: Int, Codable, Sendable, CaseIterable, DatabaseValueConvert
     /// 合法 JSON。**单独一类而不是并进 code**：从网页/日志里抠 JSON 是高频动作，
     /// 而且识别出来之后能直接给格式化，跟"看着像代码"不是一回事。
     case json = 7
+    /// 结构上成立的 SQL。判据见 `SQLDetector` —— 是结构检查不是语法校验。
+    case sql = 8
     case other = 99
 
     /// 供表格按列排序用
@@ -28,6 +30,7 @@ public enum ClipKind: Int, Codable, Sendable, CaseIterable, DatabaseValueConvert
         case .color: return "颜色"
         case .code: return "代码"
         case .json: return "JSON"
+        case .sql: return "SQL"
         case .other: return "其他"
         }
     }

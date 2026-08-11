@@ -64,6 +64,19 @@ final class PanelModel: ObservableObject {
         s.save()
     }
 
+    /// 第一排显示哪些类型标签。设置页改完，下次唤出面板生效。
+    /// **「全部」恒定在最前**，哪怕设置里被删光了也补回来 —— 否则用户找不回所有内容。
+    @Published private(set) var visibleCategories: [PanelCategory] =
+        PanelModel.categories(from: ClipflowSettings.load().categoryIDs)
+
+    static func categories(from ids: [String]) -> [PanelCategory] {
+        var out: [PanelCategory] = [.all]
+        for id in ids where id != "all" {
+            if let c = PanelCategory(id: id), !out.contains(c) { out.append(c) }
+        }
+        return out
+    }
+
     /// 预览区「原文 / 处理结果」的上下比例。和左右分栏同一套夹紧逻辑。
     @Published private(set) var previewSplitRatio: Double = ClipflowSettings.load().previewSplitRatio
 
@@ -549,6 +562,12 @@ final class PanelModel: ObservableObject {
         }
         splitRatio = s.splitRatio
         previewSplitRatio = s.previewSplitRatio
+        let cats = PanelModel.categories(from: s.categoryIDs)
+        if cats != visibleCategories {
+            visibleCategories = cats
+            // 当前选中的标签被移除了就退回「全部」，否则会停在一个看不见的分类上
+            if case .group = category {} else if !cats.contains(category) { category = .all }
+        }
     }
 
     func handleKey(_ action: KeyAction) -> Bool {

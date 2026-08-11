@@ -13,15 +13,14 @@ extension ClipflowStore {
     /// **代价被两层卡住**：先用 SQL 按"前 3 个字符里有 { 或 ["  粗筛（极强的选择性），
     /// 再对候选逐条真解析。全量解析每条内容是绝对不能做的。
     ///
-    /// - Returns: 改标的条数
+    /// - Returns: 改标的条数（JSON + SQL 合计）
     @discardableResult
     public func reclassifyJSON(limit: Int = 5000) throws -> Int {
-        let candidates: [Int64] = try contentPool.read { db in
-            try Int64.fetchAll(db, sql: """
-                SELECT id FROM items
+        // 粗筛：只看 preview 就能排掉绝大多数。**绝不能全量读 blob 再判**。
+        let candidates: [(id: Int64, preview: String)] = try contentPool.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT id, preview FROM items
                  WHERE kind IN (?, ?, ?)
-                   AND (instr(preview, '{') BETWEEN 1 AND 3
-                     OR instr(preview, '[') BETWEEN 1 AND 3)
                  ORDER BY usedSeq DESC
                  LIMIT ?
                 """,
@@ -29,25 +28,40 @@ extension ClipflowStore {
                             ClipKind.richText.rawValue,
                             ClipKind.code.rawValue,
                             limit])
+                .map { (($0["id"] as Int64), ($0["preview"] as String)) }
         }
         guard !candidates.isEmpty else { return 0 }
 
-        var hits: [Int64] = []
-        for id in candidates {
-            guard let reps = try? representations(of: id),
+        var jsonHits: [Int64] = []
+        var sqlHits: [Int64] = []
+        for c in candidates {
+            let head = SQLDetector.stripLeadingComments(c.preview).prefix(1)
+            let mightBeJSON = head == "{" || head == "["
+            let mightBeSQL = SQLDetector.firstWord(of:
+                String(SQLDetector.stripLeadingComments(c.preview).prefix(16)).uppercased()) != nil
+            guard mightBeJSON || mightBeSQL else { continue }
+
+            // 只有粗筛过了的才去读全文（preview 是截断的，括号配平判不准）
+            guard let reps = try? representations(of: c.id),
                   let plain = reps.first(where: { $0.uti == "public.utf8-plain-text" }),
                   let d = (try? data(of: plain)) ?? nil,
-                  let s = String(data: d, encoding: .utf8),
-                  JSONDetector.looksLikeJSON(s) else { continue }
-            hits.append(id)
+                  let s = String(data: d, encoding: .utf8) else { continue }
+            if mightBeJSON, JSONDetector.looksLikeJSON(s) { jsonHits.append(c.id) }
+            else if SQLDetector.looksLikeSQL(s) { sqlHits.append(c.id) }
         }
-        guard !hits.isEmpty else { return 0 }
+        guard !jsonHits.isEmpty || !sqlHits.isEmpty else { return 0 }
 
         try contentPool.write { db in
             // 一次事务批量改，不要逐条 UPDATE
-            let list = hits.map(String.init).joined(separator: ",")
-            try db.execute(sql: "UPDATE items SET kind = \(ClipKind.json.rawValue) WHERE id IN (\(list))")
+            if !jsonHits.isEmpty {
+                let list = jsonHits.map(String.init).joined(separator: ",")
+                try db.execute(sql: "UPDATE items SET kind = \(ClipKind.json.rawValue) WHERE id IN (\(list))")
+            }
+            if !sqlHits.isEmpty {
+                let list = sqlHits.map(String.init).joined(separator: ",")
+                try db.execute(sql: "UPDATE items SET kind = \(ClipKind.sql.rawValue) WHERE id IN (\(list))")
+            }
         }
-        return hits.count
+        return jsonHits.count + sqlHits.count
     }
 }

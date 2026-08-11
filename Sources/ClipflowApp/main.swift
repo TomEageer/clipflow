@@ -239,10 +239,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// JSON 类型是这个版本才加的，之前攒下的 JSON 条目都被标成了文本/富文本。
-    /// 回填一次，让老条目也显示成 JSON。做完打标记，不重复跑。
+    /// JSON / SQL 类型是后加的，之前攒下的这类条目都被标成了文本/富文本/代码。
+    /// 回填一次让老条目也归位。做完打标记，不重复跑；**加新类型时把 key 升个版本**
+    /// 就能让所有人再跑一轮。
     private func backfillJSONKindOnce() {
-        let key = "com.tomeageer.clipflow.jsonBackfill.v1"
+        let key = "com.tomeageer.clipflow.contentBackfill.v2"
         guard !UserDefaults.standard.bool(forKey: key) else { return }
         guard let store = self.store else { return }
         Task.detached(priority: .utility) {
@@ -250,7 +251,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             UserDefaults.standard.set(true, forKey: key)
             if n > 0 {
                 await MainActor.run { AppDelegate.current?.model.reload() }
-                print("JSON 回填：\(n) 条老条目改标为 JSON")
+                print("类型回填：\(n) 条老条目改标为 JSON / SQL")
             }
         }
     }

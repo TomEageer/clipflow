@@ -46,15 +46,15 @@ struct CategoryBar: View {
 
     // MARK: 第一排 —— 内置分类
 
-    /// 内置分类只有 5 个、宽度可预期，所以既不给翻页按钮也不套 ScrollView ——
+    /// 类型标签排。数量由设置页决定（默认 5 个），不给翻页按钮也不套 ScrollView ——
     /// 多两个箭头反而占地方，多一层滚动容器也只是徒增布局开销。
-    /// 面板再窄也有 300pt 的下限（`Theme.minListWidth`），这 5 个短标签放得下。
+    /// 勾太多确实会挤，但那是用户自己在设置里选的，且有 `.lineLimit(1)` 兜底。
     private var builtinRow: some View {
         Group {
             // ⚠️ 选中态**不加动画**。任何过渡都意味着"点下去要等它演完"，
             // 分类切换是高频操作，即时比好看重要。
             HStack(spacing: 4) {
-                ForEach(PanelCategory.builtins) { c in
+                ForEach(model.visibleCategories) { c in
                     ChipView(label: c.label(groups: model.groups),
                              count: c.count(kinds: model.counts, groups: model.groupCounts),
                              selected: model.category == c,

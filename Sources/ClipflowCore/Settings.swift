@@ -71,6 +71,11 @@ public struct ClipflowSettings: Codable, Sendable, Equatable {
     /// 同样存比例不存像素 —— 面板高度会变。
     public var previewSplitRatio: Double = 0.5
 
+    /// 面板第一排显示哪些类型标签（存 id）。
+    /// **「all」恒定存在**，读写时都会兜底补上 —— 全部移除会让人找不回所有内容。
+    /// 具体有哪些 id 见 App 层的 `PanelCategory`；Core 不认识它们，只负责存。
+    public var categoryIDs: [String] = ["all", "text", "image", "file", "other"]
+
     /// 界面缩放。默认 1.0；小屏或视力需要时调大，所有字号与间距按比例走。
     public var uiScale: Double = 1.0
 
@@ -109,6 +114,7 @@ public struct ClipflowSettings: Codable, Sendable, Equatable {
         panelWidth       = v(.panelWidth, d.panelWidth)
         panelHeight      = v(.panelHeight, d.panelHeight)
         splitRatio       = v(.splitRatio, d.splitRatio)
+        categoryIDs      = v(.categoryIDs, d.categoryIDs)
         previewSplitRatio = v(.previewSplitRatio, d.previewSplitRatio)
         uiScale          = v(.uiScale, d.uiScale)
         developerMode    = v(.developerMode, d.developerMode)

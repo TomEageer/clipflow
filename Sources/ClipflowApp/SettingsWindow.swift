@@ -312,6 +312,44 @@ private struct GeneralTab: View {
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
 
+            Section("分类标签") {
+                Text("第一排显示哪些标签。「全部」恒定保留 —— 全删光会让人找不回所有内容。"
+                     + "标签是**视角**不是抽屉：一条 SQL 同时出现在「文本」和「SQL」下是故意的。")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+
+                Toggle(isOn: .constant(true)) {
+                    HStack(spacing: 6) {
+                        Text("全部")
+                        Text("恒定显示，不可移除")
+                            .font(.system(size: 10)).foregroundStyle(.tertiary)
+                    }
+                }
+                .disabled(true)
+
+                ForEach(PanelCategory.selectable, id: \.id) { c in
+                    Toggle(isOn: Binding(
+                        get: { model.settings.categoryIDs.contains(c.id) },
+                        set: { on in
+                            var ids = model.settings.categoryIDs.filter { $0 != c.id }
+                            if on { ids.append(c.id) }
+                            // 存的时候按目录顺序归一，避免勾选顺序决定标签顺序
+                            let order = ["all"] + PanelCategory.selectable.map(\.id)
+                            model.settings.categoryIDs =
+                                order.filter { $0 == "all" || ids.contains($0) }
+                        })) {
+                        HStack(spacing: 6) {
+                            Text(c.label(groups: []))
+                            Text(c.hint).font(.system(size: 10)).foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+
+                Button("恢复默认标签") {
+                    model.settings.categoryIDs = PanelCategory.defaultIDs
+                }
+                .controlSize(.small)
+            }
+
             Section("开发者模式") {
                 Toggle("启用开发者功能", isOn: $model.settings.developerMode)
                 Text("JSON 识别与「JSON 格式化 / 压缩」变换不需要开这个开关 —— "

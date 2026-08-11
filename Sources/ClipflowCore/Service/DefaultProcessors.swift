@@ -115,6 +115,9 @@ public struct TypeClassifier: IngestProcessor {
         // 先判 richText 的话这条就被标成"富文本"了 —— 用户看到的是「格式」而不是「JSON」。
         if JSONDetector.looksLikeJSON(plain) {
             context.kind = .json
+        } else if SQLDetector.looksLikeSQL(plain) {
+            // 同理排在 richText 之前：从 Navicat / 网页里复制 SQL 也会带 html/rtf
+            context.kind = .sql
         } else if utis.contains("public.rtf") || utis.contains("public.html") {
             context.kind = .richText
         } else if plain.hasPrefix("http://") || plain.hasPrefix("https://") {
