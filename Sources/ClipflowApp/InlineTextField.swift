@@ -30,7 +30,10 @@ struct InlineTextField: NSViewRepresentable {
         tf.stringValue = text
         tf.lineBreakMode = .byTruncatingTail
         // 出现即聚焦。同步调用时视图还没进窗口，推到下一轮。
-        DispatchQueue.main.async { tf.window?.makeFirstResponder(tf) }
+        DispatchQueue.main.async {
+            tf.window?.makeFirstResponder(tf)
+            context.coordinator.startWatchingClicks(tf)
+        }
         return tf
     }
 
@@ -42,12 +45,48 @@ struct InlineTextField: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
+    static func dismantleNSView(_ nsView: NSTextField, coordinator: Coordinator) {
+        coordinator.stopWatchingClicks()
+    }
+
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: InlineTextField
         /// Esc 走的是取消路径，此时的失焦不能再当成提交
         private var cancelled = false
+        private var clickMonitor: Any?
+        private weak var field: NSTextField?
 
         init(_ p: InlineTextField) { parent = p }
+
+        /// ⚠️ **只靠 `controlTextDidEndEditing` 是不够的。**
+        ///
+        /// 点击 SwiftUI 视图**不会**让 NSTextField 交出 first responder ——
+        /// SwiftUI 的按钮、胶囊根本不进 responder chain，输入框始终保持聚焦，
+        /// 结束编辑的回调永远等不到。实测表现就是"点了别处，改名框还在那儿"。
+        ///
+        /// 所以自己盯窗口内的鼠标按下：落在输入框以外就当成"编辑完了"，保存并退出。
+        /// 事件原样放行，那一下点击该选中谁还是选中谁，不吞用户的操作。
+        func startWatchingClicks(_ tf: NSTextField) {
+            guard clickMonitor == nil else { return }
+            field = tf
+            clickMonitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.leftMouseDown, .rightMouseDown]
+            ) { [weak self] event in
+                guard let self, let f = self.field, let w = f.window,
+                      event.window === w else { return event }
+                let p = f.convert(event.locationInWindow, from: nil)
+                if !f.bounds.contains(p) { self.parent.onCommit() }
+                return event
+            }
+        }
+
+        func stopWatchingClicks() {
+            if let m = clickMonitor { NSEvent.removeMonitor(m) }
+            clickMonitor = nil
+            field = nil
+        }
+
+        deinit { if let m = clickMonitor { NSEvent.removeMonitor(m) } }
 
         func controlTextDidChange(_ obj: Notification) {
             guard let tf = obj.object as? NSTextField else { return }

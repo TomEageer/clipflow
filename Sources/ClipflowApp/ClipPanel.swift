@@ -809,43 +809,28 @@ private struct PreviewPane: View {
                     .padding(.horizontal, 10).padding(.vertical, 6)
             }
             ForEach(model.groups) { g in
-                Button { model.assignGroup(g.id) } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "folder").font(t.font(10)).foregroundStyle(.secondary)
-                        Text(g.name).font(t.font(12))
-                        Spacer(minLength: 12)
-                        if model.selectedItem?.groupID == g.id {
-                            Image(systemName: "checkmark").font(t.font(9))
-                        }
+                MenuRow { model.assignGroup(g.id) } content: {
+                    Image(systemName: "folder").font(t.font(10)).foregroundStyle(.secondary)
+                    Text(g.name).font(t.font(12))
+                    Spacer(minLength: 12)
+                    if model.selectedItem?.groupID == g.id {
+                        Image(systemName: "checkmark").font(t.font(9))
                     }
-                    .padding(.horizontal, 10).padding(.vertical, 5)
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
             }
             Divider()
             if model.selectedItem?.groupID != nil {
-                Button { model.assignGroup(nil) } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "folder.badge.minus").font(t.font(10))
-                        Text("移出分组").font(t.font(12))
-                        Spacer(minLength: 12)
-                    }
-                    .padding(.horizontal, 10).padding(.vertical, 5)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-            Button { model.createGroupAndAssign() } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "folder.badge.plus").font(t.font(10))
-                    Text("新建分组并放入").font(t.font(12))
+                MenuRow { model.assignGroup(nil) } content: {
+                    Image(systemName: "folder.badge.minus").font(t.font(10))
+                    Text("移出分组").font(t.font(12))
                     Spacer(minLength: 12)
                 }
-                .padding(.horizontal, 10).padding(.vertical, 5)
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            MenuRow { model.createGroupAndAssign() } content: {
+                Image(systemName: "folder.badge.plus").font(t.font(10))
+                Text("新建分组并放入").font(t.font(12))
+                Spacer(minLength: 12)
+            }
         }
         .frame(width: t.size(220))
         .background(RoundedRectangle(cornerRadius: 8).fill(.thickMaterial))
@@ -863,24 +848,17 @@ private struct PreviewPane: View {
                 .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 4)
             Divider()
             ForEach(Array(model.availableTransforms.enumerated()), id: \.element.id) { _, tr in
-                Button {
-                    model.pickTransform(tr)
-                } label: {
-                    HStack(spacing: 8) {
-                        Text(tr.group.rawValue)
-                            .font(t.font(9))
-                            .foregroundStyle(.secondary)
-                            .frame(width: t.size(34), alignment: .leading)
-                        Text(tr.title).font(t.font(12))
-                        Spacer(minLength: 12)
-                        if model.activeTransform?.id == tr.id {
-                            Image(systemName: "checkmark").font(t.font(9))
-                        }
+                MenuRow { model.pickTransform(tr) } content: {
+                    Text(tr.group.rawValue)
+                        .font(t.font(9))
+                        .foregroundStyle(.secondary)
+                        .frame(width: t.size(34), alignment: .leading)
+                    Text(tr.title).font(t.font(12))
+                    Spacer(minLength: 12)
+                    if model.activeTransform?.id == tr.id {
+                        Image(systemName: "checkmark").font(t.font(9))
                     }
-                    .padding(.horizontal, 10).padding(.vertical, 5)
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
             }
             Divider()
             Text("结果显示在下半区，确认后再粘贴")
@@ -891,6 +869,30 @@ private struct PreviewPane: View {
         .background(RoundedRectangle(cornerRadius: 8).fill(.thickMaterial))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.primary.opacity(0.12)))
         .shadow(radius: 12, y: 4)
+    }
+}
+
+// MARK: 菜单行
+
+/// 菜单里的一行。
+///
+/// **必须有悬停高亮。** 没有的话鼠标划过去毫无反馈，用户不知道哪一行是"待选中"的、
+/// 甚至不确定这几行能不能点 —— 系统菜单一直有这个反馈，自绘的菜单不给就显得是死的。
+private struct MenuRow<Content: View>: View {
+    let action: () -> Void
+    @ViewBuilder let content: () -> Content
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) { content() }
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(hovering ? Color.accentColor.opacity(0.22) : Color.clear)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
     }
 }
 
