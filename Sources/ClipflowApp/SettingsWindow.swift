@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import ClipflowCore
+import ServiceManagement
 
 /// 设置与管理窗口。三个标签页：通用 / 历史 / 存储。
 @MainActor
@@ -100,6 +101,24 @@ final class SettingsModel: ObservableObject {
         self.settings = ClipflowSettings.load()
     }
 
+    // MARK: 开机自启
+    //
+    // 用 SMAppService（macOS 13+）而不是往 LaunchAgents 塞 plist ——
+    // 后者绕过系统的登录项管理，用户在「系统设置 → 登录项」里看不到也关不掉。
+
+    @Published var launchAtLogin: Bool = SMAppService.mainApp.status == .enabled
+
+    func setLaunchAtLogin(_ on: Bool) {
+        do {
+            if on { try SMAppService.mainApp.register() }
+            else { try SMAppService.mainApp.unregister() }
+        } catch {
+            lastAction = "设置开机自启失败：\(error.localizedDescription)"
+        }
+        // 以系统的实际状态为准，不以我们请求的为准 —— 注册可能被用户拒绝
+        launchAtLogin = SMAppService.mainApp.status == .enabled
+    }
+
     // MARK: 分类标签的显示与顺序
 
     /// 当前显示的标签，**按配置里的顺序**（不含恒定的「全部」）
@@ -128,6 +147,7 @@ final class SettingsModel: ObservableObject {
 
     func refresh() {
         syncHotKey()
+        launchAtLogin = SMAppService.mainApp.status == .enabled
         refreshList()
         breakdown = (try? store.breakdownByKind()) ?? []
         ocrStats = try? store.ocrStats()
@@ -232,13 +252,12 @@ private struct GeneralTab: View {
     @ObservedObject var model: SettingsModel
 
     /// 下拉框统一宽度，右边缘才对得齐
-    private static let ctrl: CGFloat = 132
 
     /// List 嵌在 Form 里必须给定高，否则会出现内外两层滚动
     private var rowsHeight: CGFloat {
         let rows = 1 + model.enabledCategories.count
             + (model.disabledCategories.isEmpty ? 0 : model.disabledCategories.count + 1)
-        return CGFloat(rows) * 24 + 12
+        return CGFloat(rows) * 22 + 10
     }
 
     @ViewBuilder
@@ -247,12 +266,16 @@ private struct GeneralTab: View {
             Toggle(isOn: Binding(get: { enabled },
                                  set: { model.setCategory(id, enabled: $0) })) {
                 HStack(spacing: 6) {
-                    Text(c.label(groups: []))
-                    Text(c.hint).font(.system(size: 10)).foregroundStyle(.tertiary)
-                        .lineLimit(1)
+                    Text(c.label(groups: [])).font(.system(size: 12))
+                    Text(c.hint)
+                        .font(.system(size: 10)).foregroundStyle(.tertiary)
+                        .lineLimit(1).truncationMode(.tail)
                 }
             }
+            // ⚠️ Form 里控件默认是 regular 尺寸，放进这种密集列表就显得又大又重
+            // （勾选框比旁边的字还高）。这一整块统一压到 small。
             .toggleStyle(.checkbox)
+            .controlSize(.small)
         }
     }
 
@@ -265,6 +288,10 @@ private struct GeneralTab: View {
         // 真正让它"乱"的其实是**说明文字太多** —— 每组下面挂一大段小字，
         // 眼睛先撞上的是文字不是控件。现在每组最多留一句，细节改挂 `.help()` 悬停提示。
         // 窗口也收窄到 660pt：行一宽，标签和控件就被拉开，怎么排都难看。
+        // ⚠️ 下拉框**不要固定宽度**。给死宽度时，比它长的选项（「60 秒后删除」）
+        // 会撑破 frame 溢出去，各行右边缘反而对不齐 —— 试过 132、158 都不行。
+        // 让它们各自按内容取宽、由 LabeledContent 统一靠右，右边缘天然就齐了，
+        // 这也是系统设置里的做法（弹出菜单宽度本来就不一样）。
         Form {
             Section {
                 LabeledContent("历史保留期") {
@@ -272,14 +299,14 @@ private struct GeneralTab: View {
                         ForEach(ClipflowSettings.Retention.allCases, id: \.self) {
                             Text($0.label).tag($0)
                         }
-                    }.labelsHidden().frame(width: Self.ctrl)
+                    }.labelsHidden().fixedSize()
                 }
                 LabeledContent("敏感内容") {
                     Picker("", selection: $model.settings.sensitiveTTL) {
                         ForEach(ClipflowSettings.SensitiveTTL.allCases, id: \.self) {
                             Text($0.label).tag($0)
                         }
-                    }.labelsHidden().frame(width: Self.ctrl)
+                    }.labelsHidden().fixedSize()
                 }
                 .help("被识别为 token / 密钥 / 密码的内容会更快删除，也不会进入搜索索引")
             } header: {
@@ -331,30 +358,22 @@ private struct GeneralTab: View {
                 LabeledContent("界面大小") {
                     Picker("", selection: $model.settings.uiScale) {
                         ForEach(Theme.steps, id: \.self) { Text(Theme.label($0)).tag($0) }
-                    }.labelsHidden().frame(width: Self.ctrl)
+                    }.labelsHidden().fixedSize()
                 }
-                LabeledContent("面板尺寸") {
-                    HStack(spacing: 6) {
-                        Text("\(Int(model.settings.panelWidth)) × \(Int(model.settings.panelHeight))")
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                        Button("重置") {
-                            model.settings.panelWidth = 720
-                            model.settings.panelHeight = 480
-                        }.controlSize(.small)
+                // 原来这里是「面板尺寸 666×619」「列表:预览 46:54」两行只读数字 +
+                // 各一个重置按钮 —— 数字不能编辑，看了也没用；真正要改是去面板上拖。
+                // 合成一个恢复入口就够了。
+                LabeledContent("面板布局") {
+                    Button("恢复默认尺寸与比例") {
+                        model.settings.panelWidth = 720
+                        model.settings.panelHeight = 480
+                        model.settings.splitRatio = 0.53
+                        model.settings.previewSplitRatio = 0.5
                     }
+                    .controlSize(.small)
                 }
-                LabeledContent("列表 : 预览") {
-                    HStack(spacing: 6) {
-                        Text("\(Int((model.settings.splitRatio * 100).rounded())) : "
-                             + "\(Int(((1 - model.settings.splitRatio) * 100).rounded()))")
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                        Button("重置") { model.settings.splitRatio = 0.53 }
-                            .controlSize(.small)
-                    }
-                }
-                .help("面板可直接拖边框改大小、拖中间分隔条改比例，都会自动记住")
+                .help("面板的大小、左右分栏比例、预览上下比例都直接在面板上拖，会自动记住。"
+                      + "这里只提供恢复默认")
             }
 
             Section {
@@ -368,7 +387,7 @@ private struct GeneralTab: View {
                     HStack(spacing: 8) {
                         Image(systemName: "lock.fill")
                             .font(.system(size: 9)).foregroundStyle(.tertiary)
-                        Text("全部").foregroundStyle(.secondary)
+                        Text("全部").font(.system(size: 12)).foregroundStyle(.secondary)
                         Spacer()
                         Text("始终显示").font(.system(size: 10)).foregroundStyle(.tertiary)
                     }
@@ -380,7 +399,9 @@ private struct GeneralTab: View {
 
                     if !model.disabledCategories.isEmpty {
                         Text("未显示")
-                            .font(.system(size: 10)).foregroundStyle(.tertiary)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.tertiary)
+                            .padding(.top, 2)
                         ForEach(model.disabledCategories, id: \.self) { id in
                             categoryRow(id, enabled: false)
                         }
@@ -388,6 +409,7 @@ private struct GeneralTab: View {
                 }
                 .listStyle(.plain)
                 .scrollDisabled(true)
+                .environment(\.defaultMinListRowHeight, 22)
                 .frame(height: rowsHeight)
                 .alternatingRowBackgrounds(.disabled)
 
@@ -406,6 +428,9 @@ private struct GeneralTab: View {
                           + "JSON 格式化本身不需要开这个开关")
                 Toggle("识别截图里的文字", isOn: $model.settings.enableOCR)
                     .help("完全在本机运行（Apple Vision）、不联网，低电量下自动暂停。改动后重启生效")
+                Toggle("开机自动启动", isOn: Binding(get: { model.launchAtLogin },
+                                                set: { model.setLaunchAtLogin($0) }))
+                    .help("登录后自动在菜单栏运行。首次开启可能需要在「系统设置 → 通用 → 登录项」里确认")
                 Toggle("启动时捕获已有内容", isOn: $model.settings.captureOnStart)
                 Toggle("启动时检查更新", isOn: $model.settings.autoCheckUpdates)
                     .help("这是本应用唯一的网络请求")
