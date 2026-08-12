@@ -77,6 +77,20 @@ final class PanelModel: ObservableObject {
         return out
     }
 
+    /// 拖动重排类型标签。「全部」恒定在最前，不参与排序。
+    func moveCategory(_ id: String, before target: String) {
+        guard id != target, id != "all", target != "all" else { return }
+        var ids = visibleCategories.map(\.id).filter { $0 != "all" }
+        guard let from = ids.firstIndex(of: id) else { return }
+        ids.remove(at: from)
+        guard let to = ids.firstIndex(of: target) else { return }
+        ids.insert(id, at: to)
+        var st = ClipflowSettings.load()
+        st.categoryIDs = ["all"] + ids
+        st.save()
+        visibleCategories = PanelModel.categories(from: st.categoryIDs)
+    }
+
     /// 预览区「原文 / 处理结果」的上下比例。和左右分栏同一套夹紧逻辑。
     @Published private(set) var previewSplitRatio: Double = ClipflowSettings.load().previewSplitRatio
 

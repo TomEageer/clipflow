@@ -42,6 +42,18 @@ struct CategoryBar: View {
                          theme: t,
                          onSelect: { model.category = c },
                          onRename: {}, onDelete: nil)
+                    // 「全部」不参与排序：它恒定在最前，拖走了反而找不着
+                    .draggable(c == .all ? "" : c.id) {
+                        Text(c.label(groups: model.groups))
+                            .font(t.font(11))
+                            .padding(.horizontal, 8).padding(.vertical, 3)
+                            .background(Capsule().fill(.thickMaterial))
+                    }
+                    .dropDestination(for: String.self) { items, _ in
+                        guard let from = items.first, !from.isEmpty else { return false }
+                        model.moveCategory(from, before: c.id)
+                        return true
+                    }
             } trailing: {
                 EmptyView()
             }

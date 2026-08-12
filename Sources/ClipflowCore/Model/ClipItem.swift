@@ -15,6 +15,8 @@ public enum ClipKind: Int, Codable, Sendable, CaseIterable, DatabaseValueConvert
     case json = 7
     /// 结构上成立的 SQL。判据见 `SQLDetector` —— 是结构检查不是语法校验。
     case sql = 8
+    /// Shell 命令（curl / git / docker …）。判据见 `ShellDetector`，同样是结构判断。
+    case shell = 9
     case other = 99
 
     /// 供表格按列排序用
@@ -31,6 +33,7 @@ public enum ClipKind: Int, Codable, Sendable, CaseIterable, DatabaseValueConvert
         case .code: return "代码"
         case .json: return "JSON"
         case .sql: return "SQL"
+        case .shell: return "命令"
         case .other: return "其他"
         }
     }

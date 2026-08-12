@@ -243,7 +243,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// 回填一次让老条目也归位。做完打标记，不重复跑；**加新类型时把 key 升个版本**
     /// 就能让所有人再跑一轮。
     private func backfillJSONKindOnce() {
-        let key = "com.tomeageer.clipflow.contentBackfill.v2"
+        let key = "com.tomeageer.clipflow.contentBackfill.v3"
         guard !UserDefaults.standard.bool(forKey: key) else { return }
         guard let store = self.store else { return }
         Task.detached(priority: .utility) {
@@ -251,7 +251,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             UserDefaults.standard.set(true, forKey: key)
             if n > 0 {
                 await MainActor.run { AppDelegate.current?.model.reload() }
-                print("类型回填：\(n) 条老条目改标为 JSON / SQL")
+                print("类型回填：\(n) 条老条目改标为 JSON / SQL / 命令")
             }
         }
     }
@@ -268,7 +268,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             s.panelHeight = Double(size.height)
             s.save()
         }
-        panel.contentView = NSHostingView(rootView: ClipListView(model: model))
+        panel.contentView = PanelHostingView(rootView: ClipListView(model: model))
         panel.onDismiss = { [weak self] in self?.hidePanel() }
         panel.onModifierKey = { [weak self] action in
             self?.model.handleKey(action) ?? false

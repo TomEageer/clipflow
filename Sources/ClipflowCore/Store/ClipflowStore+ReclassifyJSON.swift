@@ -34,22 +34,24 @@ extension ClipflowStore {
 
         var jsonHits: [Int64] = []
         var sqlHits: [Int64] = []
+        var shellHits: [Int64] = []
         for c in candidates {
+            // 粗筛只看 preview 的开头，代价可忽略；真判定才去读全文
+            // （preview 是截断的，括号/引号配平判不准）
             let head = SQLDetector.stripLeadingComments(c.preview).prefix(1)
             let mightBeJSON = head == "{" || head == "["
-            let mightBeSQL = SQLDetector.firstWord(of:
-                String(SQLDetector.stripLeadingComments(c.preview).prefix(16)).uppercased()) != nil
-            guard mightBeJSON || mightBeSQL else { continue }
+            let mightBeText = !c.preview.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            guard mightBeJSON || mightBeText else { continue }
 
-            // 只有粗筛过了的才去读全文（preview 是截断的，括号配平判不准）
             guard let reps = try? representations(of: c.id),
                   let plain = reps.first(where: { $0.uti == "public.utf8-plain-text" }),
                   let d = (try? data(of: plain)) ?? nil,
                   let s = String(data: d, encoding: .utf8) else { continue }
             if mightBeJSON, JSONDetector.looksLikeJSON(s) { jsonHits.append(c.id) }
             else if SQLDetector.looksLikeSQL(s) { sqlHits.append(c.id) }
+            else if ShellDetector.looksLikeShell(s) { shellHits.append(c.id) }
         }
-        guard !jsonHits.isEmpty || !sqlHits.isEmpty else { return 0 }
+        guard !jsonHits.isEmpty || !sqlHits.isEmpty || !shellHits.isEmpty else { return 0 }
 
         try contentPool.write { db in
             // 一次事务批量改，不要逐条 UPDATE
@@ -61,7 +63,11 @@ extension ClipflowStore {
                 let list = sqlHits.map(String.init).joined(separator: ",")
                 try db.execute(sql: "UPDATE items SET kind = \(ClipKind.sql.rawValue) WHERE id IN (\(list))")
             }
+            if !shellHits.isEmpty {
+                let list = shellHits.map(String.init).joined(separator: ",")
+                try db.execute(sql: "UPDATE items SET kind = \(ClipKind.shell.rawValue) WHERE id IN (\(list))")
+            }
         }
-        return jsonHits.count + sqlHits.count
+        return jsonHits.count + sqlHits.count + shellHits.count
     }
 }

@@ -13,14 +13,14 @@ import ClipflowCore
 /// 标签是视角，不是互斥的抽屉。
 enum PanelCategory: Hashable, Identifiable {
     case all, text, image, file, other
-    case json, sql, url, code, richText, color
+    case json, sql, shell, url, code, richText, color
     /// 用户自建的分组。取代了原来的「置顶」——
     /// 置顶本质就是只有一个、还不能改名的分组。
     case group(Int64)
 
     /// 设置页里可勾选的全部类型标签。**「全部」不在其中** —— 它恒定存在、不可取消。
     static let selectable: [PanelCategory] =
-        [.text, .image, .file, .other, .json, .sql, .url, .code, .richText, .color]
+        [.text, .image, .file, .other, .json, .sql, .shell, .url, .code, .richText, .color]
 
     /// 默认显示哪几个。保持和以前一致，升级的人看到的东西不变。
     static let defaultIDs = ["all", "text", "image", "file", "other"]
@@ -34,6 +34,7 @@ enum PanelCategory: Hashable, Identifiable {
         case .other: return "other"
         case .json: return "json"
         case .sql: return "sql"
+        case .shell: return "shell"
         case .url: return "url"
         case .code: return "code"
         case .richText: return "richText"
@@ -51,6 +52,7 @@ enum PanelCategory: Hashable, Identifiable {
         case "other": self = .other
         case "json": self = .json
         case "sql": self = .sql
+        case "shell": self = .shell
         case "url": self = .url
         case "code": self = .code
         case "richText": self = .richText
@@ -73,6 +75,7 @@ enum PanelCategory: Hashable, Identifiable {
         case .other:    return "其他"
         case .json:     return "JSON"
         case .sql:      return "SQL"
+        case .shell:    return "命令"
         case .url:      return "链接"
         case .code:     return "代码"
         case .richText: return "富文本"
@@ -91,6 +94,7 @@ enum PanelCategory: Hashable, Identifiable {
         case .other:    return "识别不出类型的内容"
         case .json:     return "能被解析通过的 JSON"
         case .sql:      return "结构上成立的 SQL（首关键字 + 必配子句 + 括号引号配平）"
+        case .shell:    return "shell 命令：curl / git / docker / npm 等"
         case .url:      return "以 http:// 或 https:// 开头的链接"
         case .code:     return "看着像代码的片段"
         case .richText: return "带 HTML / RTF 格式的内容"
@@ -105,12 +109,13 @@ enum PanelCategory: Hashable, Identifiable {
         case .all, .group: return nil
         // 链接、代码、JSON、SQL、富文本、颜色本质都是文本，
         // 用户找的时候不会先去想它们的区别
-        case .text:     return [.text, .richText, .code, .json, .sql, .url, .color]
+        case .text:     return [.text, .richText, .code, .json, .sql, .shell, .url, .color]
         case .image:    return [.image]
         case .file:     return [.fileRef]
         case .other:    return [.other]
         case .json:     return [.json]
         case .sql:      return [.sql]
+        case .shell:    return [.shell]
         case .url:      return [.url]
         case .code:     return [.code]
         case .richText: return [.richText]

@@ -297,6 +297,9 @@ struct ClipListView: View {
         SearchField(text: $model.query, onKey: model.handleKey, fontSize: t.size(14))
             .padding(.horizontal, 12)
             .padding(.top, 10).padding(.bottom, 8)
+            // 面板没有标题栏，宿主视图又统一关掉了窗口背景拖拽（见 PanelHostingView），
+            // 所以在这一行的背景上显式还回"可以拖动窗口"的能力。
+            .background(WindowDragHandle())
     }
 
     /// 底部快捷键条。

@@ -222,7 +222,7 @@ private struct GeneralTab: View {
                         }
                     }.labelsHidden().frame(width: 130)
                 }
-                Text("超过保留期且未置顶的条目会在清理时删除，置顶条目永不自动删除。"
+                Text("超过保留期且未分组的条目会在清理时删除，已分组的条目永不自动删除。"
                      + "被识别为 token / 密钥 / 密码的内容不会进入搜索索引。")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
@@ -251,7 +251,7 @@ private struct GeneralTab: View {
                                   value: $model.settings.maxItemSizeMB)
                 }
 
-                Text("超出上限时从最久未使用的条目开始清理，置顶条目跳过。改动立即保存。")
+                Text("超出上限时从最久未使用的条目开始清理，已分组的条目跳过。改动立即保存。")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
 
@@ -394,6 +394,7 @@ private struct GeneralTab: View {
             }
         }
         .formStyle(.grouped)
+        .narrowForm()
         .onAppear { model.refresh() }
     }
 }
@@ -669,6 +670,7 @@ private struct StorageTab: View {
             }
         }
         .formStyle(.grouped)
+        .narrowForm()
         .onAppear { model.refresh() }
     }
 }
@@ -721,4 +723,27 @@ private struct FilterChip: View {
         .background(Capsule().fill(Color.accentColor.opacity(0.15)))
         .foregroundStyle(Color.accentColor)
     }
+}
+
+
+// MARK: - 设置页排版
+
+/// 把 Form 限宽并居中。
+///
+/// 窗口是 820pt 宽，而设置项大多是「一句标签 + 一个开关」——
+/// 铺满整行会让标签和控件被拉开一大截，眼睛得横扫过去才对得上，很别扭
+/// （用户原话："每一行配置都太宽了"）。
+/// 限到 560pt 是 macOS 系统设置里同类面板的常见宽度。
+private struct NarrowForm: ViewModifier {
+    func body(content: Content) -> some View {
+        HStack(spacing: 0) {
+            Spacer(minLength: 0)
+            content.frame(maxWidth: 560)
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+extension View {
+    func narrowForm() -> some View { modifier(NarrowForm()) }
 }

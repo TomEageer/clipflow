@@ -1652,3 +1652,66 @@ struct SQLDetectorTests {
         #expect(SQLDetector.looksLikeSQL("SELECT a FROM b"))
     }
 }
+
+// MARK: - Shell 命令识别
+
+@Suite("Shell 命令识别")
+struct ShellDetectorTests {
+
+    @Test("常见命令都能认出来")
+    func positives() {
+        let cases = [
+            "curl -X POST https://api.example.com/v1/orders -H 'Content-Type: application/json'",
+            "$ curl -sL https://example.com | sh",
+            "git commit -m \"fix: 修一下\"",
+            "docker run --rm -it ubuntu bash",
+            "npm install --save-dev vite",
+            "brew install ffmpeg",
+            "ssh tom@154.36.173.132",
+            "sudo systemctl restart nginx",
+            "#!/bin/bash\necho hi",
+            "# 先装依赖\nnpm ci",
+            "kubectl get pods -n prod",
+            "python3 -m venv .venv",
+            "find . -name '*.swift'",
+            "rm -rf build/",
+        ]
+        for c in cases {
+            #expect(ShellDetector.looksLikeShell(c), "没认出来：\(c.prefix(40))")
+        }
+    }
+
+    /// 弱命令词在中英文句子里太常见，只看首词必然误判 —— 所以要求有选项或路径
+    @Test("像命令的自然语句不能误判")
+    func negatives() {
+        let cases = [
+            "find 一下这个文件在哪",
+            "open the door",
+            "cat 很可爱",
+            "echo 这个词的意思是回声",
+            "git",                       // 只有命令名，没参数
+            "docker",
+            "今天要 make 一个决定",
+            "SELECT * FROM users",       // 是 SQL 不是 shell
+            "",
+        ]
+        for c in cases {
+            #expect(!ShellDetector.looksLikeShell(c), "误判成命令：\(c.prefix(40))")
+        }
+    }
+
+    @Test("引号不配平判不通过（多半是被截断了）")
+    func unbalanced() {
+        #expect(!ShellDetector.looksLikeShell("curl -H 'Content-Type: application/json"))
+        #expect(ShellDetector.looksLikeShell("curl -d \"a=1\" https://x.com"))
+        // 转义引号不算配对
+        #expect(ShellDetector.looksLikeShell("git commit -m \"say \\\"hi\\\"\""))
+    }
+
+    @Test("curl 能被单独认出来")
+    func curl() {
+        #expect(ShellDetector.looksLikeCurl("curl https://example.com"))
+        #expect(ShellDetector.looksLikeCurl("$ sudo curl -O https://x.com/a.zip"))
+        #expect(!ShellDetector.looksLikeCurl("git push origin main"))
+    }
+}

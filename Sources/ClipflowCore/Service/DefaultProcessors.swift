@@ -118,6 +118,9 @@ public struct TypeClassifier: IngestProcessor {
         } else if SQLDetector.looksLikeSQL(plain) {
             // 同理排在 richText 之前：从 Navicat / 网页里复制 SQL 也会带 html/rtf
             context.kind = .sql
+        } else if ShellDetector.looksLikeShell(plain) {
+            // 同理：从文档/终端复制命令也常带 html
+            context.kind = .shell
         } else if utis.contains("public.rtf") || utis.contains("public.html") {
             context.kind = .richText
         } else if plain.hasPrefix("http://") || plain.hasPrefix("https://") {
