@@ -100,6 +100,32 @@ final class SettingsModel: ObservableObject {
         self.settings = ClipflowSettings.load()
     }
 
+    // MARK: 分类标签的显示与顺序
+
+    /// 当前显示的标签，**按配置里的顺序**（不含恒定的「全部」）
+    var enabledCategories: [String] {
+        settings.categoryIDs.filter { $0 != "all" }
+    }
+
+    /// 没勾上的，按目录固有顺序列在下面
+    var disabledCategories: [String] {
+        PanelCategory.selectable.map(\.id).filter { !settings.categoryIDs.contains($0) }
+    }
+
+    func setCategory(_ id: String, enabled: Bool) {
+        var ids = settings.categoryIDs.filter { $0 != id }
+        // 勾上就追加到末尾 —— 插到哪里由用户自己拖，不替他猜
+        if enabled { ids.append(id) }
+        if !ids.contains("all") { ids.insert("all", at: 0) }
+        settings.categoryIDs = ids
+    }
+
+    func moveCategory(from: IndexSet, to: Int) {
+        var list = enabledCategories
+        list.move(fromOffsets: from, toOffset: to)
+        settings.categoryIDs = ["all"] + list
+    }
+
     func refresh() {
         syncHotKey()
         refreshList()
@@ -208,6 +234,28 @@ private struct GeneralTab: View {
     /// 下拉框统一宽度，右边缘才对得齐
     private static let ctrl: CGFloat = 132
 
+    /// List 嵌在 Form 里必须给定高，否则会出现内外两层滚动
+    private var rowsHeight: CGFloat {
+        let rows = 1 + model.enabledCategories.count
+            + (model.disabledCategories.isEmpty ? 0 : model.disabledCategories.count + 1)
+        return CGFloat(rows) * 24 + 12
+    }
+
+    @ViewBuilder
+    private func categoryRow(_ id: String, enabled: Bool) -> some View {
+        if let c = PanelCategory(id: id) {
+            Toggle(isOn: Binding(get: { enabled },
+                                 set: { model.setCategory(id, enabled: $0) })) {
+                HStack(spacing: 6) {
+                    Text(c.label(groups: []))
+                    Text(c.hint).font(.system(size: 10)).foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+            }
+            .toggleStyle(.checkbox)
+        }
+    }
+
     var body: some View {
         // 用系统那套 grouped Form，不要自己造排版。
         //
@@ -310,31 +358,46 @@ private struct GeneralTab: View {
             }
 
             Section {
-                // ⚠️ 这里必须用复选框而不是开关：网格里一格一个开关的话，
-                // 每行读起来是「全部 ▮ 文本 ▮ 图片 ▮」—— 开关到底属于左边那个词
-                // 还是右边那个词，看不出来。复选框在标签左侧，天然无歧义。
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 128), alignment: .leading)],
-                          alignment: .leading, spacing: 6) {
-                    Toggle("全部", isOn: .constant(true)).disabled(true)
-                        .help("恒定显示，不可移除")
-                    ForEach(PanelCategory.selectable, id: \.id) { c in
-                        Toggle(c.label(groups: []), isOn: Binding(
-                            get: { model.settings.categoryIDs.contains(c.id) },
-                            set: { on in
-                                var ids = model.settings.categoryIDs.filter { $0 != c.id }
-                                if on { ids.append(c.id) }
-                                let order = ["all"] + PanelCategory.selectable.map(\.id)
-                                model.settings.categoryIDs =
-                                    order.filter { $0 == "all" || ids.contains($0) }
-                            }))
-                        .help(c.hint)
+                // 可拖动排序的列表，不是一堆铺开的复选框 ——
+                // 这一节要表达的是「显示哪些、按什么顺序」，顺序是它的一半含义，
+                // 网格根本表达不了顺序。
+                //
+                // 「全部」单独放在 ForEach 外面：**不在 ForEach 里就天然拖不动**，
+                // 也就不需要额外写"禁止拖到第 0 位"这类判断。
+                List {
+                    HStack(spacing: 8) {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 9)).foregroundStyle(.tertiary)
+                        Text("全部").foregroundStyle(.secondary)
+                        Spacer()
+                        Text("始终显示").font(.system(size: 10)).foregroundStyle(.tertiary)
+                    }
+
+                    ForEach(model.enabledCategories, id: \.self) { id in
+                        categoryRow(id, enabled: true)
+                    }
+                    .onMove { from, to in model.moveCategory(from: from, to: to) }
+
+                    if !model.disabledCategories.isEmpty {
+                        Text("未显示")
+                            .font(.system(size: 10)).foregroundStyle(.tertiary)
+                        ForEach(model.disabledCategories, id: \.self) { id in
+                            categoryRow(id, enabled: false)
+                        }
                     }
                 }
-                .toggleStyle(.checkbox)
+                .listStyle(.plain)
+                .scrollDisabled(true)
+                .frame(height: rowsHeight)
+                .alternatingRowBackgrounds(.disabled)
+
                 Button("恢复默认") { model.settings.categoryIDs = PanelCategory.defaultIDs }
                     .controlSize(.small)
             } header: {
                 Text("面板顶部显示的标签")
+            } footer: {
+                Text("勾选决定显不显示，拖动决定先后顺序。")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
             }
 
             Section("功能") {
