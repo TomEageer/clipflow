@@ -35,32 +35,30 @@ struct CategoryBar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             // 第一排：类型标签
-            ChipScrollRow(categories: model.visibleCategories, theme: t) { c in
+            ChipScrollRow(categories: model.visibleCategories, theme: t,
+                          reorder: { model.moveCategoryLive($0, before: $1) },
+                          commitOrder: { model.persistCategoryOrder() },
+                          pinnedIDs: ["all"]) { c in
                 ChipView(label: c.label(groups: model.groups),
                          count: c.count(kinds: model.counts, groups: model.groupCounts),
                          selected: model.category == c,
                          theme: t,
                          onSelect: { model.category = c },
                          onRename: {}, onDelete: nil)
-                    // 「全部」不参与排序：它恒定在最前，拖走了反而找不着
-                    .draggable(c == .all ? "" : c.id) {
-                        Text(c.label(groups: model.groups))
-                            .font(t.font(11))
-                            .padding(.horizontal, 8).padding(.vertical, 3)
-                            .background(Capsule().fill(.thickMaterial))
-                    }
-                    .dropDestination(for: String.self) { items, _ in
-                        guard let from = items.first, !from.isEmpty else { return false }
-                        model.moveCategory(from, before: c.id)
-                        return true
-                    }
             } trailing: {
                 EmptyView()
             }
 
             // 第二排：自定义分组
             ChipScrollRow(categories: groupChips, theme: t,
-                          emptyHint: "还没有分组，点右边的 + 新建") { c in
+                          emptyHint: "还没有分组，点右边的 + 新建",
+                          reorder: { from, to in
+                              guard let f = Int64(from.replacingOccurrences(of: "group-", with: "")),
+                                    let tt = Int64(to.replacingOccurrences(of: "group-", with: ""))
+                              else { return }
+                              model.moveGroupLive(f, before: tt)
+                          },
+                          commitOrder: { model.persistGroupOrder() }) { c in
                 groupChip(c)
             } trailing: {
                 addButton
@@ -89,23 +87,6 @@ struct CategoryBar: View {
                      onSelect: { model.category = c },
                      onRename: { beginRename(c) },
                      onDelete: { model.deleteGroup(gid) })
-                // 拖动排序。传的是分组 id 的字符串 —— 只在本进程内用，
-                // 不需要自定义 UTType，String 自带 Transferable。
-                //
-                // ⚠️ **拖拽预览里绝不能改 @State**（比如用 onAppear 记"正在拖谁"）：
-                // 预览在视图构建期求值，改 state → 触发重建 → 预览再求值 …… 死循环。
-                // 实测表现是主线程持续空转、面板淡入动画永远跑不完。
-                .draggable("\(gid)") {
-                    Text(c.label(groups: model.groups))
-                        .font(t.font(11))
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(Capsule().fill(.thickMaterial))
-                }
-                .dropDestination(for: String.self) { items, _ in
-                    guard let s = items.first, let from = Int64(s) else { return false }
-                    model.moveGroup(from, before: gid)
-                    return true
-                }
         }
     }
 
@@ -148,6 +129,11 @@ private struct ChipScrollRow<Chip: View, Trailing: View>: View {
     let categories: [PanelCategory]
     let theme: Theme
     var emptyHint: String? = nil
+    /// 非 nil 时这一排可拖动重排：(被拖的 id, 目标 id)
+    var reorder: ((String, String) -> Void)? = nil
+    var commitOrder: (() -> Void)? = nil
+    /// 不参与排序的 id（「全部」恒定在最前）
+    var pinnedIDs: Set<String> = []
     @ViewBuilder let chip: (PanelCategory) -> Chip
     @ViewBuilder let trailing: () -> Trailing
 
@@ -170,8 +156,15 @@ private struct ChipScrollRow<Chip: View, Trailing: View>: View {
                                 .font(t.font(10)).foregroundStyle(.tertiary)
                                 .padding(.vertical, 3)
                         }
-                        ForEach(categories) { c in
-                            chip(c).id(c.id)
+                        if let reorder, let commitOrder {
+                            ReorderableRow(items: categories,
+                                           pinnedIDs: pinnedIDs,
+                                           move: reorder,
+                                           commit: commitOrder) { c in
+                                chip(c)
+                            }
+                        } else {
+                            ForEach(categories) { c in chip(c).id(c.id) }
                         }
                     }
                     .padding(.vertical, 1)

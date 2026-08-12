@@ -205,197 +205,248 @@ struct SettingsView: View {
 private struct GeneralTab: View {
     @ObservedObject var model: SettingsModel
 
+    /// 同一页里所有下拉框共用的宽度 —— 各自按内容伸缩的话右边缘参差不齐
+    private static let ctrl: CGFloat = 130
+
     var body: some View {
-        Form {
-            Section("保留策略") {
-                LabeledContent("历史保留期") {
-                    Picker("", selection: $model.settings.retention) {
-                        ForEach(ClipflowSettings.Retention.allCases, id: \.self) {
-                            Text($0.label).tag($0)
-                        }
-                    }.labelsHidden().frame(width: 130)
+        // ⚠️ 布局原则（前两版都做反了，记在这）：
+        //
+        // ① **不要每个控件独占一行。** 一行放得下的就并排放 ——
+        //    「历史保留期」和「敏感内容」两个下拉框加起来还不到半个窗口宽，
+        //    各占一行会把标签和控件拉开老远，眼睛要横扫过去才对得上。
+        // ② **不要压成居中的窄列**，两边留一大片空白看着像没做完。
+        // ③ **也不要拆成左右两栏页面** —— 那是把一件事拆成两处看。
+        //
+        // 正确做法：单列铺满、按功能分组、组间用分割线断开、组内相关控件并排。
+        SettingsPage {
+            SettingsGroup("保留策略",
+                          note: "超过保留期且未分组的条目会在清理时删除，已分组的条目永不自动删除。"
+                              + "被识别为 token / 密钥 / 密码的内容不会进入搜索索引。") {
+                HStack(alignment: .firstTextBaseline, spacing: 28) {
+                    field("历史保留期") {
+                        Picker("", selection: $model.settings.retention) {
+                            ForEach(ClipflowSettings.Retention.allCases, id: \.self) {
+                                Text($0.label).tag($0)
+                            }
+                        }.labelsHidden().frame(width: Self.ctrl)
+                    }
+                    field("敏感内容") {
+                        Picker("", selection: $model.settings.sensitiveTTL) {
+                            ForEach(ClipflowSettings.SensitiveTTL.allCases, id: \.self) {
+                                Text($0.label).tag($0)
+                            }
+                        }.labelsHidden().frame(width: Self.ctrl)
+                    }
+                    Spacer(minLength: 0)
                 }
-                LabeledContent("敏感内容") {
-                    Picker("", selection: $model.settings.sensitiveTTL) {
-                        ForEach(ClipflowSettings.SensitiveTTL.allCases, id: \.self) {
-                            Text($0.label).tag($0)
-                        }
-                    }.labelsHidden().frame(width: 130)
-                }
-                Text("超过保留期且未分组的条目会在清理时删除，已分组的条目永不自动删除。"
-                     + "被识别为 token / 密钥 / 密码的内容不会进入搜索索引。")
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
             }
 
-            Section("容量上限") {
-                LabeledContent {
+            SettingsGroup("容量上限",
+                          note: "超出上限时从最久未使用的条目开始清理，已分组的条目跳过。改动立即保存。") {
+                slider("存储上限",
+                       sub: model.stats.map {
+                           "已用 " + ByteCountFormatter().string(fromByteCount: Int64($0.totalBytes))
+                       }) {
                     SteppedSlider(steps: SizeSteps.storageMB,
                                   label: SizeSteps.storageLabel,
                                   value: $model.settings.maxStorageMB)
-                } label: {
-                    Text("存储上限")
-                    if let st = model.stats {
-                        Text("已用 \(ByteCountFormatter().string(fromByteCount: Int64(st.totalBytes)))")
-                    }
                 }
-
-                LabeledContent("条目数上限") {
+                slider("条目数上限", sub: nil) {
                     SteppedSlider(steps: SizeSteps.itemCounts,
                                   label: SizeSteps.countLabel,
                                   value: $model.settings.maxItems)
                 }
-
-                LabeledContent("单条最大") {
+                slider("单条最大", sub: nil) {
                     SteppedSlider(steps: SizeSteps.itemSizeMB,
                                   label: SizeSteps.itemSizeLabel,
                                   value: $model.settings.maxItemSizeMB)
                 }
-
-                Text("超出上限时从最久未使用的条目开始清理，已分组的条目跳过。改动立即保存。")
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
             }
 
-            Section("快捷键") {
-                LabeledContent("唤出剪贴板面板") {
-                    HStack(spacing: 6) {
-                        HotKeyRecorderView(combo: $model.hotKey) { c in
-                            model.hotKeyOK = AppDelegate.applyHotKeyGlobally(c)
-                            model.syncHotKey()
+            SettingsGroup("快捷键与外观",
+                          note: "点一下快捷键按钮再按组合键，必须带至少一个修饰键；录制期间全局快捷键临时停用。"
+                              + "面板可直接拖边框改大小、拖中间分隔条改两栏比例，都会自动记住；"
+                              + "界面大小在下次唤出面板时生效。") {
+                HStack(alignment: .firstTextBaseline, spacing: 28) {
+                    field("唤出面板") {
+                        HStack(spacing: 6) {
+                            HotKeyRecorderView(combo: $model.hotKey) { c in
+                                model.hotKeyOK = AppDelegate.applyHotKeyGlobally(c)
+                                model.syncHotKey()
+                            }
+                            .frame(width: 118, height: 22)
+                            Button("默认") {
+                                _ = AppDelegate.resetHotKeyToDefault()
+                                model.syncHotKey()
+                                model.hotKeyOK = true
+                            }.controlSize(.small)
                         }
-                        .frame(width: 132, height: 22)
-                        Button("恢复默认") {
-                            _ = AppDelegate.resetHotKeyToDefault()
-                            model.syncHotKey()
-                            model.hotKeyOK = true
-                        }
-                        .controlSize(.small)
                     }
+                    field("界面大小") {
+                        Picker("", selection: $model.settings.uiScale) {
+                            ForEach(Theme.steps, id: \.self) { Text(Theme.label($0)).tag($0) }
+                        }.labelsHidden().frame(width: Self.ctrl)
+                    }
+                    Spacer(minLength: 0)
                 }
                 if !model.hotKeyOK {
                     Label("这个组合已被别的 App 占用，仍在使用 \(model.hotKey.display)",
                           systemImage: "exclamationmark.triangle.fill")
                         .font(.system(size: 10)).foregroundStyle(.orange)
                 }
-                Text("点一下按钮再按组合键，必须带至少一个修饰键。录制期间全局快捷键临时停用，取消或关窗会自动恢复。")
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
-            }
-
-            Section("外观") {
-                LabeledContent("界面大小") {
-                    Picker("", selection: $model.settings.uiScale) {
-                        ForEach(Theme.steps, id: \.self) { Text(Theme.label($0)).tag($0) }
-                    }.labelsHidden().frame(width: 110)
-                }
-                LabeledContent("面板尺寸") {
-                    HStack(spacing: 6) {
-                        Text("\(Int(model.settings.panelWidth)) × \(Int(model.settings.panelHeight))")
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                        Button("恢复默认") {
-                            model.settings.panelWidth = 720
-                            model.settings.panelHeight = 480
-                        }.controlSize(.small)
-                    }
-                }
-                LabeledContent("列表与预览") {
-                    HStack(spacing: 6) {
-                        Text("\(Int((model.settings.splitRatio * 100).rounded())) : "
-                             + "\(Int(((1 - model.settings.splitRatio) * 100).rounded()))")
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                        Button("恢复默认") { model.settings.splitRatio = 0.53 }
-                            .controlSize(.small)
-                    }
-                }
-                Text("面板可直接用鼠标拖边框调整大小，中间的分隔条可左右拖动改变两栏比例，都会自动记住。"
-                     + "界面大小改动在下次唤出面板时生效。")
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
-            }
-
-            Section("分类标签") {
-                Text("第一排显示哪些标签。「全部」恒定保留 —— 全删光会让人找不回所有内容。"
-                     + "标签是**视角**不是抽屉：一条 SQL 同时出现在「文本」和「SQL」下是故意的。")
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
-
-                Toggle(isOn: .constant(true)) {
-                    HStack(spacing: 6) {
-                        Text("全部")
-                        Text("恒定显示，不可移除")
-                            .font(.system(size: 10)).foregroundStyle(.tertiary)
-                    }
-                }
-                .disabled(true)
-
-                ForEach(PanelCategory.selectable, id: \.id) { c in
-                    Toggle(isOn: Binding(
-                        get: { model.settings.categoryIDs.contains(c.id) },
-                        set: { on in
-                            var ids = model.settings.categoryIDs.filter { $0 != c.id }
-                            if on { ids.append(c.id) }
-                            // 存的时候按目录顺序归一，避免勾选顺序决定标签顺序
-                            let order = ["all"] + PanelCategory.selectable.map(\.id)
-                            model.settings.categoryIDs =
-                                order.filter { $0 == "all" || ids.contains($0) }
-                        })) {
+                HStack(alignment: .firstTextBaseline, spacing: 28) {
+                    field("面板尺寸") {
                         HStack(spacing: 6) {
-                            Text(c.label(groups: []))
-                            Text(c.hint).font(.system(size: 10)).foregroundStyle(.tertiary)
+                            Text("\(Int(model.settings.panelWidth)) × \(Int(model.settings.panelHeight))")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                            Button("默认") {
+                                model.settings.panelWidth = 720
+                                model.settings.panelHeight = 480
+                            }.controlSize(.small)
                         }
                     }
+                    field("列表 : 预览") {
+                        HStack(spacing: 6) {
+                            Text("\(Int((model.settings.splitRatio * 100).rounded())) : "
+                                 + "\(Int(((1 - model.settings.splitRatio) * 100).rounded()))")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                            Button("默认") { model.settings.splitRatio = 0.53 }
+                                .controlSize(.small)
+                        }
+                    }
+                    Spacer(minLength: 0)
                 }
-
-                Button("恢复默认标签") {
-                    model.settings.categoryIDs = PanelCategory.defaultIDs
-                }
-                .controlSize(.small)
             }
 
-            Section("开发者模式") {
-                Toggle("启用开发者功能", isOn: $model.settings.developerMode)
-                Text("JSON 识别与「JSON 格式化 / 压缩」变换不需要开这个开关 —— "
-                     + "复制到合法 JSON 时，预览右上角会直接出现「格式化」按钮。"
-                     + "这里开启的是：默认就以格式化形式展示 JSON，以及额外的变换项"
-                     + "（JSON 转义 / 反转义、URL 编解码、Base64 编解码）。"
-                     + "所有变换只影响这一次粘贴，不改动库里的原始内容。")
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            SettingsGroup("分类标签",
+                          note: "「全部」恒定保留 —— 全删光会让人找不回所有内容。"
+                              + "标签是视角不是抽屉：一条 SQL 同时出现在「文本」和「SQL」下是故意的。") {
+                // 十来个勾选项各占一行纯属浪费 —— 网格铺开，一屏就看完了
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)],
+                          alignment: .leading, spacing: 6) {
+                    Toggle("全部", isOn: .constant(true)).disabled(true)
+                    ForEach(PanelCategory.selectable, id: \.id) { c in
+                        Toggle(c.label(groups: []), isOn: Binding(
+                            get: { model.settings.categoryIDs.contains(c.id) },
+                            set: { on in
+                                var ids = model.settings.categoryIDs.filter { $0 != c.id }
+                                if on { ids.append(c.id) }
+                                // 按目录顺序归一，免得勾选先后决定标签顺序
+                                let order = ["all"] + PanelCategory.selectable.map(\.id)
+                                model.settings.categoryIDs =
+                                    order.filter { $0 == "all" || ids.contains($0) }
+                            }))
+                        .help(c.hint)
+                    }
+                }
+                Button("恢复默认标签") { model.settings.categoryIDs = PanelCategory.defaultIDs }
+                    .controlSize(.small)
             }
 
-            Section("图片文字识别") {
-                Toggle("识别截图里的文字，使其可被搜索", isOn: $model.settings.enableOCR)
-                if let o = model.ocrStats {
-                    LabeledContent("已识别") {
-                        Text("\(o.done) 张 · 待处理 \(o.pending) · 无文字或跳过 \(o.skipped)")
+            SettingsGroup("开关",
+                          note: "开发者功能：默认以格式化形式展示 JSON，并启用 JSON 转义 / URL / Base64 等变换"
+                              + "（JSON 格式化本身不需要开这个开关）。"
+                              + "文字识别完全在本机运行（Apple Vision）、不联网，低电量下自动暂停，改动后重启生效。"
+                              + "检查更新是本应用唯一的网络请求。") {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), alignment: .leading)],
+                          alignment: .leading, spacing: 6) {
+                    Toggle("启用开发者功能", isOn: $model.settings.developerMode)
+                    Toggle("识别截图里的文字", isOn: $model.settings.enableOCR)
+                    Toggle("启动时捕获已有内容", isOn: $model.settings.captureOnStart)
+                    Toggle("启动时自动检查更新", isOn: $model.settings.autoCheckUpdates)
+                }
+                HStack(spacing: 12) {
+                    if let o = model.ocrStats {
+                        Text("已识别 \(o.done) 张 · 待处理 \(o.pending) · 无文字或跳过 \(o.skipped)")
                             .font(.system(size: 11)).foregroundStyle(.secondary)
                     }
+                    Spacer(minLength: 0)
+                    if model.updateState.isChecking { ProgressView().controlSize(.small) }
+                    Text(model.updateState.message)
+                        .font(.system(size: 11))
+                        .foregroundStyle(model.updateState.hasUpdate ? Color.accentColor : .secondary)
+                    Button(model.updateState.hasUpdate ? "前往下载" : "检查更新") {
+                        if model.updateState.hasUpdate { Updater.openReleasePage() }
+                        else { model.checkForUpdates() }
+                    }.controlSize(.small)
                 }
-                Text("完全在本机运行（Apple Vision），不联网。低电量模式下自动暂停。"
-                     + "识别到密码 / 密钥类文字的图片，结果不会进入搜索索引。改动后重启生效。")
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
-            }
-
-            Section("行为") {
-                Toggle("启动时捕获剪贴板已有内容", isOn: $model.settings.captureOnStart)
-                Toggle("启动时自动检查更新", isOn: $model.settings.autoCheckUpdates)
-                LabeledContent("软件更新") {
-                    HStack(spacing: 8) {
-                        if model.updateState.isChecking { ProgressView().controlSize(.small) }
-                        Text(model.updateState.message)
-                            .font(.system(size: 11))
-                            .foregroundStyle(model.updateState.hasUpdate ? Color.accentColor : .secondary)
-                        Button(model.updateState.hasUpdate ? "前往下载" : "检查更新") {
-                            if model.updateState.hasUpdate { Updater.openReleasePage() }
-                            else { model.checkForUpdates() }
-                        }
-                        .controlSize(.small)
-                    }
-                }
-                Text("检查更新会向 GitHub 请求一次最新版本号，这是本应用唯一的网络请求，且只在你触发或勾选自动检查时发生。")
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
             }
         }
-        .formStyle(.grouped)
-        .narrowForm()
         .onAppear { model.refresh() }
+    }
+
+    // MARK: 小件
+
+    /// 「标签 + 控件」竖着一组，这样多组才能并排放在同一行
+    @ViewBuilder
+    private func field<C: View>(_ title: String, @ViewBuilder content: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.system(size: 11)).foregroundStyle(.secondary)
+            content()
+        }
+    }
+
+    /// 滑块本来就要占满宽度，标签放左边、滑块吃掉剩余空间
+    @ViewBuilder
+    private func slider<C: View>(_ title: String, sub: String?,
+                                 @ViewBuilder content: () -> C) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(.system(size: 12))
+                if let sub {
+                    Text(sub).font(.system(size: 10)).foregroundStyle(.tertiary)
+                }
+            }
+            .frame(width: 110, alignment: .leading)
+            content()
+        }
+    }
+}
+
+// MARK: - 设置页排版件
+
+/// 一整页：单列铺满 + 内边距 + 可滚动。
+private struct SettingsPage<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) { content() }
+                .padding(.horizontal, 22)
+                .padding(.vertical, 18)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// 一组设置：标题 + 内容 + 一句说明，组与组之间用分割线断开。
+///
+/// 用分割线而不是一堆独立卡片：卡片会给每一组加一圈内边距和圆角，
+/// 五六组叠下来页面全是边框；分割线只表达"这里换话题了"，密度高得多。
+private struct SettingsGroup<Content: View>: View {
+    let title: String
+    var note: String? = nil
+    @ViewBuilder let content: () -> Content
+
+    init(_ title: String, note: String? = nil, @ViewBuilder content: @escaping () -> Content) {
+        self.title = title
+        self.note = note
+        self.content = content
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.system(size: 12, weight: .semibold))
+            content()
+            if let note {
+                Text(note).font(.system(size: 10)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 12)
+        .overlay(alignment: .bottom) { Divider() }
     }
 }
 
@@ -622,16 +673,18 @@ private struct StorageTab: View {
     private var f: ByteCountFormatter { ByteCountFormatter() }
 
     var body: some View {
-        Form {
+        SettingsPage {
             if let s = model.stats {
-                Section("当前占用") {
-                    LabeledContent("条目总数", value: "\(s.items)")
-                    LabeledContent("内容库", value: f.string(fromByteCount: Int64(s.contentDBBytes)))
-                    LabeledContent("索引库", value: f.string(fromByteCount: Int64(s.indexDBBytes)))
-                    LabeledContent("附件（图片等）",
-                                   value: "\(s.blobCount) 个 · \(f.string(fromByteCount: Int64(s.blobBytes)))")
-                    LabeledContent("合计") {
-                        Text(f.string(fromByteCount: Int64(s.totalBytes))).bold()
+                SettingsGroup("当前占用") {
+                    // 五个数字各占一行是纯粹的浪费 —— 它们是要**互相对比**的，
+                    // 摊成一排才看得出谁占大头
+                    HStack(alignment: .top, spacing: 0) {
+                        metric("条目总数", "\(s.items)")
+                        metric("内容库", f.string(fromByteCount: Int64(s.contentDBBytes)))
+                        metric("索引库", f.string(fromByteCount: Int64(s.indexDBBytes)))
+                        metric("附件", "\(s.blobCount) 个 · "
+                               + f.string(fromByteCount: Int64(s.blobBytes)))
+                        metric("合计", f.string(fromByteCount: Int64(s.totalBytes)), bold: true)
                     }
                     if model.settings.maxStorageMB > 0 {
                         let used = Double(s.totalBytes)
@@ -641,37 +694,56 @@ private struct StorageTab: View {
                             Text("上限 \(model.settings.maxStorageMB) MB · 已用 \(Int(used / budget * 100))%")
                                 .font(.system(size: 10)).foregroundStyle(.secondary)
                         }
+                        .padding(.top, 4)
                     }
                 }
             }
 
-            Section("按类型分布") {
-                ForEach(model.breakdown, id: \.kind) { row in
-                    LabeledContent(row.kind.label,
-                                   value: "\(row.count) 条 · \(f.string(fromByteCount: Int64(row.bytes)))")
-                }
+            SettingsGroup("按类型分布") {
                 if model.breakdown.isEmpty {
-                    Text("暂无数据").foregroundStyle(.secondary)
+                    Text("暂无数据").font(.system(size: 11)).foregroundStyle(.secondary)
+                } else {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), alignment: .leading)],
+                              alignment: .leading, spacing: 5) {
+                        ForEach(model.breakdown, id: \.kind) { row in
+                            HStack(spacing: 6) {
+                                Text(row.kind.label).font(.system(size: 11))
+                                Spacer(minLength: 8)
+                                Text("\(row.count) 条 · \(f.string(fromByteCount: Int64(row.bytes)))")
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.trailing, 16)
+                        }
+                    }
                 }
             }
 
-            Section("维护") {
-                HStack {
+            SettingsGroup("维护",
+                          note: "删除条目只删数据库行，附件文件要单独回收，否则磁盘只涨不降。") {
+                HStack(spacing: 8) {
                     Button("按设置清理") { model.runCleanup() }
                     Button("只回收孤儿附件") { model.vacuumOnly() }
-                    Spacer()
+                    Spacer(minLength: 0)
                     Button("在访达中显示") { model.revealDataFolder() }
                 }
-                Text("删除条目只删数据库行，附件文件要单独回收，否则磁盘只涨不降。")
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
                 Text(model.store.paths.root.path)
                     .font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
                     .textSelection(.enabled)
             }
         }
-        .formStyle(.grouped)
-        .narrowForm()
         .onAppear { model.refresh() }
+    }
+
+    /// 一格指标：上面小标题、下面数值。多格并排就是一条可横向对比的带子。
+    private func metric(_ title: String, _ value: String, bold: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.system(size: 10)).foregroundStyle(.secondary)
+            Text(value)
+                .font(.system(size: 13, weight: bold ? .semibold : .regular, design: .rounded))
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -726,24 +798,3 @@ private struct FilterChip: View {
 }
 
 
-// MARK: - 设置页排版
-
-/// 把 Form 限宽并居中。
-///
-/// 窗口是 820pt 宽，而设置项大多是「一句标签 + 一个开关」——
-/// 铺满整行会让标签和控件被拉开一大截，眼睛得横扫过去才对得上，很别扭
-/// （用户原话："每一行配置都太宽了"）。
-/// 限到 560pt 是 macOS 系统设置里同类面板的常见宽度。
-private struct NarrowForm: ViewModifier {
-    func body(content: Content) -> some View {
-        HStack(spacing: 0) {
-            Spacer(minLength: 0)
-            content.frame(maxWidth: 560)
-            Spacer(minLength: 0)
-        }
-    }
-}
-
-extension View {
-    func narrowForm() -> some View { modifier(NarrowForm()) }
-}

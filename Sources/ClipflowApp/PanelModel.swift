@@ -77,18 +77,22 @@ final class PanelModel: ObservableObject {
         return out
     }
 
-    /// 拖动重排类型标签。「全部」恒定在最前，不参与排序。
-    func moveCategory(_ id: String, before target: String) {
+    /// 拖动过程中重排类型标签。「全部」恒定在最前，不参与排序。只改内存。
+    func moveCategoryLive(_ id: String, before target: String) {
         guard id != target, id != "all", target != "all" else { return }
-        var ids = visibleCategories.map(\.id).filter { $0 != "all" }
-        guard let from = ids.firstIndex(of: id) else { return }
-        ids.remove(at: from)
-        guard let to = ids.firstIndex(of: target) else { return }
-        ids.insert(id, at: to)
+        var cats = visibleCategories
+        guard let from = cats.firstIndex(where: { $0.id == id }),
+              let _ = cats.firstIndex(where: { $0.id == target }) else { return }
+        let moved = cats.remove(at: from)
+        guard let to = cats.firstIndex(where: { $0.id == target }) else { return }
+        cats.insert(moved, at: to)
+        visibleCategories = cats
+    }
+
+    func persistCategoryOrder() {
         var st = ClipflowSettings.load()
-        st.categoryIDs = ["all"] + ids
+        st.categoryIDs = visibleCategories.map(\.id)
         st.save()
-        visibleCategories = PanelModel.categories(from: st.categoryIDs)
     }
 
     /// 预览区「原文 / 处理结果」的上下比例。和左右分栏同一套夹紧逻辑。
@@ -355,17 +359,21 @@ final class PanelModel: ObservableObject {
         if let n { assignGroup(n) } else { popup = .none }
     }
 
-    /// 拖动排序：把 `id` 挪到 `target` 当前所在的位置。
-    /// 顺序落库，下次打开还是这个次序。
-    func moveGroup(_ id: Int64, before target: Int64) {
-        guard id != target else { return }
-        var ids = groups.compactMap(\.id)
-        guard let from = ids.firstIndex(of: id) else { return }
-        ids.remove(at: from)
-        guard let to = ids.firstIndex(of: target) else { return }
-        ids.insert(id, at: to)
-        try? store.reorderGroups(ids)
-        reloadGroups()
+    /// 拖动过程中的重排：**只改内存顺序**。
+    /// 每移动一格就写一次数据库纯属浪费，落库交给 `persistGroupOrder()`。
+    func moveGroupLive(_ id: Int64, before target: Int64) {
+        guard id != target,
+              let from = groups.firstIndex(where: { $0.id == id }) else { return }
+        var g = groups
+        let moved = g.remove(at: from)
+        guard let to = g.firstIndex(where: { $0.id == target }) else { return }
+        g.insert(moved, at: to)
+        groups = g
+    }
+
+    /// 松手时落库。下次打开还是这个次序。
+    func persistGroupOrder() {
+        try? store.reorderGroups(groups.compactMap(\.id))
     }
 
     func renameGroup(_ id: Int64, to name: String) {
