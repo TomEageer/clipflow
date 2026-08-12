@@ -4,7 +4,7 @@ import Foundation
 
 public struct PlainTextTransformer: Transformer {
     public let id = "text.plain"
-    public let title = "转为纯文本"
+    public var title: String { CL("transform.plain") }
     public let group = TransformGroup.text
     public let developerOnly = false
     public init() {}
@@ -14,7 +14,7 @@ public struct PlainTextTransformer: Transformer {
 
 public struct TrimBlankLinesTransformer: Transformer {
     public let id = "text.trim-blank"
-    public let title = "去掉多余空行"
+    public var title: String { CL("transform.trimBlank") }
     public let group = TransformGroup.text
     public let developerOnly = false
     public init() {}
@@ -29,7 +29,7 @@ public struct TrimBlankLinesTransformer: Transformer {
 
 public struct UppercaseTransformer: Transformer {
     public let id = "text.upper"
-    public let title = "转大写"
+    public var title: String { CL("transform.upper") }
     public let group = TransformGroup.text
     public let developerOnly = false
     public init() {}
@@ -39,7 +39,7 @@ public struct UppercaseTransformer: Transformer {
 
 public struct LowercaseTransformer: Transformer {
     public let id = "text.lower"
-    public let title = "转小写"
+    public var title: String { CL("transform.lower") }
     public let group = TransformGroup.text
     public let developerOnly = false
     public init() {}
@@ -53,7 +53,7 @@ public struct LowercaseTransformer: Transformer {
 /// 对普通用户天然隐形；藏在开关后面只会让人以为没做（真发生过）。
 public struct JSONPrettyTransformer: Transformer {
     public let id = "json.pretty"
-    public let title = "JSON 格式化"
+    public var title: String { CL("transform.jsonPretty") }
     public let group = TransformGroup.json
     public let developerOnly = false
     public init() {}
@@ -67,7 +67,7 @@ public struct JSONPrettyTransformer: Transformer {
 /// 同上，也是自带内容判定的安全变换。
 public struct JSONMinifyTransformer: Transformer {
     public let id = "json.minify"
-    public let title = "JSON 压缩"
+    public var title: String { CL("transform.jsonMinify") }
     public let group = TransformGroup.json
     public let developerOnly = false
     public init() {}
@@ -81,7 +81,7 @@ public struct JSONMinifyTransformer: Transformer {
 /// 把一段 JSON 变成可嵌进字符串字面量的形式（转义引号与换行）
 public struct JSONEscapeTransformer: Transformer {
     public let id = "json.escape"
-    public let title = "JSON 转义"
+    public var title: String { CL("transform.jsonEscape") }
     public let group = TransformGroup.json
     public let developerOnly = true
     public init() {}
@@ -102,7 +102,7 @@ public struct JSONEscapeTransformer: Transformer {
 /// 反向：把日志里抠出来的转义 JSON 还原成可读的
 public struct JSONUnescapeTransformer: Transformer {
     public let id = "json.unescape"
-    public let title = "JSON 反转义"
+    public var title: String { CL("transform.jsonUnescape") }
     public let group = TransformGroup.json
     public let developerOnly = true
     public init() {}
@@ -124,7 +124,7 @@ public struct JSONUnescapeTransformer: Transformer {
 
 public struct URLEncodeTransformer: Transformer {
     public let id = "url.encode"
-    public let title = "URL 编码"
+    public var title: String { CL("transform.urlEncode") }
     public let group = TransformGroup.encoding
     public let developerOnly = true
     public init() {}
@@ -143,7 +143,7 @@ public struct URLEncodeTransformer: Transformer {
 
 public struct URLDecodeTransformer: Transformer {
     public let id = "url.decode"
-    public let title = "URL 解码"
+    public var title: String { CL("transform.urlDecode") }
     public let group = TransformGroup.encoding
     public let developerOnly = true
     public init() {}
@@ -158,7 +158,7 @@ public struct URLDecodeTransformer: Transformer {
 
 public struct Base64EncodeTransformer: Transformer {
     public let id = "base64.encode"
-    public let title = "Base64 编码"
+    public var title: String { CL("transform.b64Encode") }
     public let group = TransformGroup.encoding
     public let developerOnly = true
     public init() {}
@@ -170,7 +170,7 @@ public struct Base64EncodeTransformer: Transformer {
 
 public struct Base64DecodeTransformer: Transformer {
     public let id = "base64.decode"
-    public let title = "Base64 解码"
+    public var title: String { CL("transform.b64Decode") }
     public let group = TransformGroup.encoding
     public let developerOnly = true
     public init() {}

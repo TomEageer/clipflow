@@ -21,9 +21,17 @@ public protocol Transformer: Sendable {
 }
 
 public enum TransformGroup: String, Sendable, CaseIterable {
-    case text = "文本"
-    case json = "JSON"
-    case encoding = "编码"
+    case text
+    case json
+    case encoding
+
+    public var label: String {
+        switch self {
+        case .text: return CL("transform.group.text")
+        case .json: return CL("transform.group.json")
+        case .encoding: return CL("transform.group.encoding")
+        }
+    }
 
     public var order: Int {
         switch self {

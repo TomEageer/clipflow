@@ -1,0 +1,45 @@
+/* Item kinds */
+"kind.text"     = "Text";
+"kind.richText" = "Rich Text";
+"kind.url"      = "Link";
+"kind.image"    = "Image";
+"kind.file"     = "File";
+"kind.color"    = "Color";
+"kind.code"     = "Code";
+"kind.json"     = "JSON";
+"kind.sql"      = "SQL";
+"kind.shell"    = "Command";
+"kind.other"    = "Other";
+
+/* Retention */
+"retention.7"      = "7 days";
+"retention.30"     = "30 days";
+"retention.90"     = "90 days";
+"retention.365"    = "1 year";
+"retention.never"  = "Keep forever";
+
+/* Sensitive TTL */
+"ttl.60"      = "Delete after 60s";
+"ttl.600"     = "Delete after 10 min";
+"ttl.3600"    = "Delete after 1 hour";
+"ttl.same"    = "Same as normal items";
+"ttl.never"   = "Don't record sensitive content";
+
+/* Transform groups */
+"transform.group.text"     = "Text";
+"transform.group.json"     = "JSON";
+"transform.group.encoding" = "Encoding";
+
+/* Transforms */
+"transform.plain"        = "Paste as Plain Text";
+"transform.trimBlank"    = "Trim Blank Lines";
+"transform.upper"        = "UPPERCASE";
+"transform.lower"        = "lowercase";
+"transform.jsonPretty"   = "Format JSON";
+"transform.jsonMinify"   = "Minify JSON";
+"transform.jsonEscape"   = "Escape JSON";
+"transform.jsonUnescape" = "Unescape JSON";
+"transform.urlEncode"    = "URL Encode";
+"transform.urlDecode"    = "URL Decode";
+"transform.b64Encode"    = "Base64 Encode";
+"transform.b64Decode"    = "Base64 Decode";

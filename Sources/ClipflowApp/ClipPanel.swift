@@ -244,9 +244,9 @@ struct ClipListView: View {
                         Image(systemName: model.query.isEmpty ? "tray" : "magnifyingglass")
                             .font(.system(size: 22)).foregroundStyle(.tertiary)
                         Text(model.query.isEmpty
-                             ? (model.category == .all ? "还没有记录任何内容"
-                                                       : "这个分类下还没有内容")
-                             : "没有匹配结果")
+                             ? (model.category == .all ? L("panel.empty")
+                                                       : L("panel.empty_category"))
+                             : L("panel.no_match"))
                             .foregroundStyle(.secondary).font(.system(size: 12))
                         Spacer()
                     }
@@ -318,18 +318,18 @@ struct ClipListView: View {
 
     /// 按重要性排序：越靠前越晚被砍掉
     private var allHints: [(String, String)] {
-        var h: [(String, String)] = [("↑↓", "选择"), ("⏎", "粘贴")]
-        if model.processedText != nil { h.append(("⌘⏎", "粘处理结果")) }
-        if !model.availableTransforms.isEmpty { h.append(("⌘T", "变换")) }
-        h.append(("⌘P", model.selectedGroupName ?? "分组"))
-        h.append(("⌘R", "命名"))
-        h.append(("⌘⌫", "删除"))
+        var h: [(String, String)] = [("↑↓", L("panel.key.select")), ("⏎", L("panel.key.paste"))]
+        if model.processedText != nil { h.append(("⌘⏎", L("panel.key.paste_processed"))) }
+        if !model.availableTransforms.isEmpty { h.append(("⌘T", L("panel.key.transform"))) }
+        h.append(("⌘P", model.selectedGroupName ?? L("panel.key.group")))
+        h.append(("⌘R", L("panel.key.rename")))
+        h.append(("⌘⌫", L("panel.key.delete")))
         return h
     }
 
     private func footerRow(_ hints: [(String, String)]) -> some View {
         HStack(spacing: 12) {
-            Text("\(model.total) 条")
+            Text(L("panel.count", model.total))
             Spacer(minLength: 8)
             ForEach(hints, id: \.0) { KeyHint($0.0, $0.1) }
         }
@@ -472,12 +472,12 @@ private struct PreviewPane: View {
                                     .resizable().frame(width: t.size(13), height: t.size(13))
                             }
                             if item.sensitivity == .sensitive {
-                                Label("敏感", systemImage: "lock.fill")
+                                Label(L("panel.sensitive"), systemImage: "lock.fill")
                                     .font(t.font(10)).foregroundStyle(.orange)
                             }
                             Text(item.kind.label)
                             Text("·")
-                            Text(item.sourceAppName ?? "未知来源").lineLimit(1)
+                            Text(item.sourceAppName ?? L("panel.unknown_source")).lineLimit(1)
                             Spacer(minLength: 6)
                             // 动作入口放这里而不是只留快捷键 ——
                             // 变换功能之前只能靠 ⌘T 触发，等于没人知道它存在。
@@ -548,7 +548,7 @@ private struct PreviewPane: View {
                 }
             } else {
                 VStack { Spacer()
-                    Text("选中一条查看").font(t.font(11)).foregroundStyle(.tertiary)
+                    Text(L("panel.select_to_view")).font(t.font(11)).foregroundStyle(.tertiary)
                     Spacer() }
             }
         }
@@ -566,7 +566,7 @@ private struct PreviewPane: View {
                 // 图里识别出的文字 —— 搜索能命中它，所以要让用户看得见
                 if let ocr = model.ocrText(for: item) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Label("图中文字", systemImage: "text.viewfinder")
+                        Label(L("panel.ocr_text"), systemImage: "text.viewfinder")
                             .font(t.font(10)).foregroundStyle(.secondary)
                         Text(ocr)
                             .font(t.font(10))
@@ -585,7 +585,7 @@ private struct PreviewPane: View {
     private func originalPane(_ item: ClipItem) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             paneHeader(
-                title: "原文",
+                title: L("panel.original"),
                 icon: "doc.plaintext",
                 edited: model.isOriginalEdited,
                 canEdit: !model.originalTruncated,
@@ -609,7 +609,7 @@ private struct PreviewPane: View {
     private func processedPane(_ item: ClipItem, showBody: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             paneHeader(
-                title: model.activeTransform?.title ?? "处理结果",
+                title: model.activeTransform?.title ?? L("panel.processed"),
                 icon: "arrow.turn.down.right",
                 edited: model.isProcessedEdited,
                 canEdit: !model.processedTruncated,
@@ -623,7 +623,7 @@ private struct PreviewPane: View {
                     if showBody {
                         Button { model.pasteTransformed() } label: {
                             HStack(spacing: 3) {
-                                Text("粘贴")
+                                Text(L("panel.key.paste"))
                                 Text("⌘⏎").foregroundStyle(.tertiary)
                             }
                             .font(t.font(10))
@@ -718,7 +718,7 @@ private struct PreviewPane: View {
             Image(systemName: icon).font(t.font(9))
             Text(title).font(t.font(10, weight: .medium))
             if edited {
-                Text("已改（不写回库）")
+                Text(L("panel.edited"))
                     .font(t.font(9)).foregroundStyle(.tertiary)
             }
             Spacer(minLength: 6)
@@ -737,7 +737,7 @@ private struct PreviewPane: View {
             Button(action: onCopy) {
                 HStack(spacing: 3) {
                     Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    Text(copied ? "已复制" : "复制")
+                    Text(copied ? L("panel.copied") : L("panel.copy"))
                 }
                 .font(t.font(10))
                 .padding(.horizontal, 6).padding(.vertical, 2)
@@ -786,12 +786,12 @@ private struct PreviewPane: View {
                 Image(systemName: "tag").font(t.font(9))
                 InlineTextField(text: Binding(get: { model.namingDraft ?? "" },
                                               set: { model.namingDraft = $0 }),
-                                placeholder: "给这条起个名字…",
+                                placeholder: L("panel.name_placeholder"),
                                 fontSize: t.size(11),
                                 onCommit: { model.commitName() },
                                 onCancel: { model.cancelNaming() })
                     .frame(height: t.size(19))
-                Text("⏎ 保存").font(t.font(9)).foregroundStyle(.tertiary)
+                Text(L("panel.name_save_hint")).font(t.font(9)).foregroundStyle(.tertiary)
             } else if let n = item.name, !n.isEmpty {
                 Image(systemName: "tag.fill").font(t.font(9))
                 Text(n).font(t.font(11, weight: .medium)).foregroundStyle(.primary).lineLimit(1)
@@ -812,7 +812,7 @@ private struct PreviewPane: View {
                 Button { model.beginNaming() } label: {
                     HStack(spacing: 3) {
                         Image(systemName: "tag")
-                        Text("命名")
+                        Text(L("panel.key.rename"))
                         Text("⌘R").foregroundStyle(.tertiary)
                     }
                     .font(t.font(9))
@@ -854,7 +854,7 @@ private struct PreviewPane: View {
         Button { model.togglePopup(.transforms) } label: {
             HStack(spacing: 3) {
                 Image(systemName: "wand.and.rays")
-                Text("变换")
+                Text(L("panel.key.transform"))
                 Text("⌘T").foregroundStyle(.tertiary)
             }
             .font(t.font(10))
@@ -871,12 +871,12 @@ private struct PreviewPane: View {
     /// 分组菜单。⌘P 或点预览头的分组按钮打开。
     private var groupMenu: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("放进分组…")
+            Text(L("panel.group_menu_title"))
                 .font(t.font(10)).foregroundStyle(.secondary)
                 .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 4)
             Divider()
             if model.groups.isEmpty {
-                Text("还没有分组")
+                Text(L("panel.group_none"))
                     .font(t.font(11)).foregroundStyle(.tertiary)
                     .padding(.horizontal, 10).padding(.vertical, 6)
             }
@@ -894,13 +894,13 @@ private struct PreviewPane: View {
             if model.selectedItem?.groupID != nil {
                 MenuRow { model.assignGroup(nil) } content: {
                     Image(systemName: "folder.badge.minus").font(t.font(10))
-                    Text("移出分组").font(t.font(12))
+                    Text(L("panel.group_remove")).font(t.font(12))
                     Spacer(minLength: 12)
                 }
             }
             MenuRow { model.createGroupAndAssign() } content: {
                 Image(systemName: "folder.badge.plus").font(t.font(10))
-                Text("新建分组并放入").font(t.font(12))
+                Text(L("panel.group_new")).font(t.font(12))
                 Spacer(minLength: 12)
             }
         }
@@ -915,13 +915,13 @@ private struct PreviewPane: View {
     /// 选中后只把结果放进下半区，**不直接粘出去**。
     private var transformMenu: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("处理为…")
+            Text(L("panel.transform_menu_title"))
                 .font(t.font(10)).foregroundStyle(.secondary)
                 .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 4)
             Divider()
             ForEach(Array(model.availableTransforms.enumerated()), id: \.element.id) { _, tr in
                 MenuRow { model.pickTransform(tr) } content: {
-                    Text(tr.group.rawValue)
+                    Text(tr.group.label)
                         .font(t.font(9))
                         .foregroundStyle(.secondary)
                         .frame(width: t.size(34), alignment: .leading)
@@ -933,7 +933,7 @@ private struct PreviewPane: View {
                 }
             }
             Divider()
-            Text("结果显示在下半区，确认后再粘贴")
+            Text(L("panel.transform_menu_hint"))
                 .font(t.font(9)).foregroundStyle(.tertiary)
                 .padding(.horizontal, 10).padding(.vertical, 5)
         }
@@ -1065,7 +1065,7 @@ private struct SearchField: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSTextField {
         let tf = NSTextField()
-        tf.placeholderString = "搜索剪贴板…"
+        tf.placeholderString = L("panel.search")
         tf.isBordered = false
         tf.drawsBackground = false
         tf.focusRingType = .none

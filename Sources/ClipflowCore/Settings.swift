@@ -13,11 +13,11 @@ public struct ClipflowSettings: Codable, Sendable, Equatable {
 
         public var label: String {
             switch self {
-            case .days7: return "7 天"
-            case .days30: return "30 天"
-            case .days90: return "90 天"
-            case .days365: return "1 年"
-            case .forever: return "永久保留"
+            case .days7: return CL("retention.7")
+            case .days30: return CL("retention.30")
+            case .days90: return CL("retention.90")
+            case .days365: return CL("retention.365")
+            case .forever: return CL("retention.never")
             }
         }
     }
@@ -32,11 +32,11 @@ public struct ClipflowSettings: Codable, Sendable, Equatable {
 
         public var label: String {
             switch self {
-            case .seconds60: return "60 秒后删除"
-            case .minutes10: return "10 分钟后删除"
-            case .hours1: return "1 小时后删除"
-            case .sameAsNormal: return "与普通条目相同"
-            case .never: return "不记录敏感内容"
+            case .seconds60: return CL("ttl.60")
+            case .minutes10: return CL("ttl.600")
+            case .hours1: return CL("ttl.3600")
+            case .sameAsNormal: return CL("ttl.same")
+            case .never: return CL("ttl.never")
             }
         }
     }
@@ -75,6 +75,10 @@ public struct ClipflowSettings: Codable, Sendable, Equatable {
     /// **「all」恒定存在**，读写时都会兜底补上 —— 全部移除会让人找不回所有内容。
     /// 具体有哪些 id 见 App 层的 `PanelCategory`；Core 不认识它们，只负责存。
     public var categoryIDs: [String] = ["all", "text", "image", "file", "other"]
+
+    /// 界面语言："system"（跟随系统，默认）/ "zh-Hans" / "en"。
+    /// Core 不认识这些值的含义，只负责存 —— 解释权在 App 层的 `AppLanguage`。
+    public var appLanguage: String = "system"
 
     /// 界面缩放。默认 1.0；小屏或视力需要时调大，所有字号与间距按比例走。
     public var uiScale: Double = 1.0
@@ -115,6 +119,7 @@ public struct ClipflowSettings: Codable, Sendable, Equatable {
         panelHeight      = v(.panelHeight, d.panelHeight)
         splitRatio       = v(.splitRatio, d.splitRatio)
         categoryIDs      = v(.categoryIDs, d.categoryIDs)
+        appLanguage      = v(.appLanguage, d.appLanguage)
         previewSplitRatio = v(.previewSplitRatio, d.previewSplitRatio)
         uiScale          = v(.uiScale, d.uiScale)
         developerMode    = v(.developerMode, d.developerMode)

@@ -28,6 +28,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private(set) var lastPasteWaitMs: Double = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 语言要在建任何界面之前定下来，否则第一帧会用错语言
+        Loc.override = AppLanguage(rawValue: settings.appLanguage)?.overrideCode
+
         // 菜单栏常驻，不进 Dock
         NSApp.setActivationPolicy(.accessory)
 
@@ -104,6 +107,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             name: NSNotification.Name("com.apple.accessibility.api"), object: nil)
     }
 
+    /// 语言变了：菜单栏是 AppKit 自己画的，不会因为 SwiftUI 刷新而更新，得手动重建。
+    func reloadLocalizedUI() {
+        rebuildMenu()
+        model.objectWillChange.send()
+    }
+
     /// NSMenuDelegate：菜单即将展开时重建，保证状态永远是当下的
     func menuNeedsUpdate(_ menu: NSMenu) {
         rebuildMenu()
@@ -138,14 +147,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.removeAllItems()
 
         let count = (try? store.count()) ?? 0
-        let header = NSMenuItem(title: "Clipflow · 已记录 \(count) 条", action: nil, keyEquivalent: "")
+        let header = NSMenuItem(title: L("menu.recorded", count), action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
         menu.addItem(.separator())
 
         // 显示**实际生效**的组合；一个都注册不上时明确说出来，不装作正常
-        let title = activeCombo.map { "打开剪贴板面板（\($0.display)）" }
-            ?? "打开剪贴板面板（快捷键未生效）"
+        let title = activeCombo.map { L("menu.open_panel", $0.display) }
+            ?? L("menu.open_panel_nokey")
         let open = NSMenuItem(title: title, action: #selector(togglePanel), keyEquivalent: "")
         open.target = self
         if activeCombo == nil {
@@ -161,7 +170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // 状态用 SF Symbol 表达，不用 emoji —— 原生应用不该出现表情符号
         let granted = Paster.hasAccessibilityPermission
         let perm = NSMenuItem(
-            title: granted ? "自动粘贴已就绪" : "未授权 — 点此授予辅助功能权限",
+            title: granted ? L("menu.perm.ready") : L("menu.perm.missing"),
             action: granted ? nil : #selector(requestPermission), keyEquivalent: "")
         perm.target = self
         perm.isEnabled = !granted
@@ -170,26 +179,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(perm)
 
         if !granted {
-            let hint = NSMenuItem(title: "    （未授权也能用：内容会放进剪贴板，手动 ⌘V）",
+            let hint = NSMenuItem(title: L("menu.perm.hint"),
                                   action: nil, keyEquivalent: "")
             hint.isEnabled = false
             menu.addItem(hint)
-            let reopen = NSMenuItem(title: "    授权后仍显示未授权？点此重开系统设置",
+            let reopen = NSMenuItem(title: L("menu.perm.reopen"),
                                     action: #selector(openAccessibilitySettings), keyEquivalent: "")
             reopen.target = self
             menu.addItem(reopen)
         }
 
         menu.addItem(.separator())
-        let log = NSMenuItem(title: "查看粘贴日志…", action: #selector(openPasteLog), keyEquivalent: "")
+        let log = NSMenuItem(title: L("menu.paste_log"), action: #selector(openPasteLog), keyEquivalent: "")
         log.target = self
         menu.addItem(log)
 
-        let prefs = NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ",")
+        let prefs = NSMenuItem(title: L("menu.settings"), action: #selector(openSettings), keyEquivalent: ",")
         prefs.target = self
         menu.addItem(prefs)
 
-        let donate = NSMenuItem(title: "赞赏支持…", action: #selector(openDonate), keyEquivalent: "")
+        let donate = NSMenuItem(title: L("menu.donate"), action: #selector(openDonate), keyEquivalent: "")
         donate.target = self
         donate.image = NSImage(systemSymbolName: "heart", accessibilityDescription: nil)
         menu.addItem(donate)
@@ -201,12 +210,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         menu.addItem(update)
 
-        let about = NSMenuItem(title: "关于 Clipflow", action: #selector(openAbout), keyEquivalent: "")
+        let about = NSMenuItem(title: L("menu.about"), action: #selector(openAbout), keyEquivalent: "")
         about.target = self
         menu.addItem(about)
 
         menu.addItem(.separator())
-        let quit = NSMenuItem(title: "退出 Clipflow", action: #selector(NSApplication.terminate(_:)),
+        let quit = NSMenuItem(title: L("menu.quit"), action: #selector(NSApplication.terminate(_:)),
                               keyEquivalent: "q")
         menu.addItem(quit)
     }
@@ -565,7 +574,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// 捕获到新内容时刷新 UI。用静态方法 + 弱引用，避免把 detached task 与 self 的
     /// 隔离域纠缠在一起（Swift 6 会判定为数据竞争风险）。
-    private static weak var current: AppDelegate?
+    static weak var current: AppDelegate?
 
     static func notifyCaptured() async {
         await MainActor.run {

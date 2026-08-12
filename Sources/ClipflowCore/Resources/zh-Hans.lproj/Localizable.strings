@@ -1,0 +1,45 @@
+/* 条目类型 */
+"kind.text"     = "文本";
+"kind.richText" = "富文本";
+"kind.url"      = "链接";
+"kind.image"    = "图片";
+"kind.file"     = "文件";
+"kind.color"    = "颜色";
+"kind.code"     = "代码";
+"kind.json"     = "JSON";
+"kind.sql"      = "SQL";
+"kind.shell"    = "命令";
+"kind.other"    = "其他";
+
+/* 保留期 */
+"retention.7"      = "7 天";
+"retention.30"     = "30 天";
+"retention.90"     = "90 天";
+"retention.365"    = "1 年";
+"retention.never"  = "永久保留";
+
+/* 敏感内容保留 */
+"ttl.60"      = "60 秒后删除";
+"ttl.600"     = "10 分钟后删除";
+"ttl.3600"    = "1 小时后删除";
+"ttl.same"    = "与普通条目相同";
+"ttl.never"   = "不记录敏感内容";
+
+/* 变换分组 */
+"transform.group.text"     = "文本";
+"transform.group.json"     = "JSON";
+"transform.group.encoding" = "编码";
+
+/* 变换 */
+"transform.plain"        = "转为纯文本";
+"transform.trimBlank"    = "去掉多余空行";
+"transform.upper"        = "转大写";
+"transform.lower"        = "转小写";
+"transform.jsonPretty"   = "JSON 格式化";
+"transform.jsonMinify"   = "JSON 压缩";
+"transform.jsonEscape"   = "JSON 转义";
+"transform.jsonUnescape" = "JSON 反转义";
+"transform.urlEncode"    = "URL 编码";
+"transform.urlDecode"    = "URL 解码";
+"transform.b64Encode"    = "Base64 编码";
+"transform.b64Decode"    = "Base64 解码";

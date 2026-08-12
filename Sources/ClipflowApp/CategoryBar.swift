@@ -51,7 +51,7 @@ struct CategoryBar: View {
 
             // 第二排：自定义分组
             ChipScrollRow(categories: groupChips, theme: t,
-                          emptyHint: "还没有分组，点右边的 + 新建",
+                          emptyHint: L("panel.group_empty_hint"),
                           reorder: { from, to in
                               guard let f = Int64(from.replacingOccurrences(of: "group-", with: "")),
                                     let tt = Int64(to.replacingOccurrences(of: "group-", with: ""))
@@ -72,7 +72,7 @@ struct CategoryBar: View {
         if model.renamingGroup == gid {
             // 改名态。**只有双击才进得来**，且回车/Esc/点别处都能出去。
             InlineTextField(text: $renameText,
-                            placeholder: "分组名",
+                            placeholder: L("panel.group_name_placeholder"),
                             fontSize: t.size(11),
                             onCommit: { model.renameGroup(gid, to: renameText) },
                             onCancel: { model.renamingGroup = nil })
@@ -257,9 +257,9 @@ private struct ChipView: View {
         .onHover { hovering = $0 }
         .contextMenu {
             if let onDelete {
-                Button("重命名…", action: onRename)
+                Button(L("panel.group_rename"), action: onRename)
                 // 说清楚删的是分组这个标签、不是里面的内容，否则没人敢点
-                Button("删除分组（条目保留）", role: .destructive, action: onDelete)
+                Button(L("panel.group_delete"), role: .destructive, action: onDelete)
             }
         }
     }

@@ -68,19 +68,19 @@ enum PanelCategory: Hashable, Identifiable {
 
     func label(groups: [ClipGroup]) -> String {
         switch self {
-        case .all:      return "全部"
-        case .text:     return "文本"
-        case .image:    return "图片"
-        case .file:     return "文件"
-        case .other:    return "其他"
-        case .json:     return "JSON"
-        case .sql:      return "SQL"
-        case .shell:    return "命令"
-        case .url:      return "链接"
-        case .code:     return "代码"
-        case .richText: return "富文本"
-        case .color:    return "颜色"
-        case .group(let g): return groups.first { $0.id == g }?.name ?? "分组"
+        case .all:      return L("category.all")
+        case .text:     return L("category.text")
+        case .image:    return L("category.image")
+        case .file:     return L("category.file")
+        case .other:    return L("category.other")
+        case .json:     return L("category.json")
+        case .sql:      return L("category.sql")
+        case .shell:    return L("category.shell")
+        case .url:      return L("category.url")
+        case .code:     return L("category.code")
+        case .richText: return L("category.richText")
+        case .color:    return L("category.color")
+        case .group(let g): return groups.first { $0.id == g }?.name ?? L("category.group")
         }
     }
 

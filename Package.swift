@@ -22,6 +22,9 @@ let package = Package(
         .target(
             name: "ClipflowCore",
             dependencies: [.product(name: "GRDB", package: "GRDB.swift")],
+            // Core 也有面向用户的字符串（类型名、保留期档位），要跟界面一起换语言。
+            // Foundation 的本地化不违反「Core 禁 import AppKit/SwiftUI」那条硬规则。
+            resources: [.process("Resources")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         // NSPasteboard 住在 AppKit 里，而 ClipflowCore 有测试硬禁 import AppKit。

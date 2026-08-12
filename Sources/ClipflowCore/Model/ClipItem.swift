@@ -24,17 +24,17 @@ public enum ClipKind: Int, Codable, Sendable, CaseIterable, DatabaseValueConvert
 
     public var label: String {
         switch self {
-        case .text: return "文本"
-        case .richText: return "富文本"
-        case .url: return "链接"
-        case .image: return "图片"
-        case .fileRef: return "文件"
-        case .color: return "颜色"
-        case .code: return "代码"
-        case .json: return "JSON"
-        case .sql: return "SQL"
-        case .shell: return "命令"
-        case .other: return "其他"
+        case .text: return CL("kind.text")
+        case .richText: return CL("kind.richText")
+        case .url: return CL("kind.url")
+        case .image: return CL("kind.image")
+        case .fileRef: return CL("kind.file")
+        case .color: return CL("kind.color")
+        case .code: return CL("kind.code")
+        case .json: return CL("kind.json")
+        case .sql: return CL("kind.sql")
+        case .shell: return CL("kind.shell")
+        case .other: return CL("kind.other")
         }
     }
 }

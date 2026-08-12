@@ -352,8 +352,16 @@ struct ArchitectureTests {
         let e = try #require(FileManager.default.enumerator(at: core, includingPropertiesForKeys: nil))
         for case let f as URL in e where f.pathExtension == "swift" {
             let text = try String(contentsOf: f, encoding: .utf8)
+            // ⚠️ **必须先剥掉注释再扫。** 裸文本匹配会把「这里禁 import SwiftUI」
+            // 这种注释也判成违规 —— 一条本来是好事的注释反倒让测试挂掉（真发生过）。
+            let code = text.split(separator: "\n", omittingEmptySubsequences: false)
+                .map { line -> Substring in
+                    guard let r = line.range(of: "//") else { return line }
+                    return line[line.startIndex..<r.lowerBound]
+                }
+                .joined(separator: "\n")
             for banned in ["import AppKit", "import SwiftUI", "import UIKit", "import VisionKit"] {
-                #expect(!text.contains(banned), "\(f.lastPathComponent) 引入了 \(banned)")
+                #expect(!code.contains(banned), "\(f.lastPathComponent) 引入了 \(banned)")
             }
         }
     }
@@ -1713,5 +1721,59 @@ struct ShellDetectorTests {
         #expect(ShellDetector.looksLikeCurl("curl https://example.com"))
         #expect(ShellDetector.looksLikeCurl("$ sudo curl -O https://x.com/a.zip"))
         #expect(!ShellDetector.looksLikeCurl("git push origin main"))
+    }
+}
+
+// MARK: - 本地化
+
+@Suite("本地化词表")
+struct LocalizationTests {
+
+    private func strings(_ target: String, _ lang: String) throws -> [String: String] {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let url = root.appending(path: "Sources/\(target)/Resources/\(lang).lproj/Localizable.strings")
+        let text = try String(contentsOf: url, encoding: .utf8)
+        var out: [String: String] = [:]
+        for line in text.split(separator: "\n") {
+            guard let eq = line.range(of: "=") else { continue }
+            let k = line[line.startIndex..<eq.lowerBound]
+                .trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+            let v = line[eq.upperBound...]
+                .trimmingCharacters(in: .whitespaces)
+                .trimmingCharacters(in: CharacterSet(charactersIn: ";"))
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+            if !k.isEmpty, !k.hasPrefix("/*") { out[k] = v }
+        }
+        return out
+    }
+
+    /// 两种语言的词表必须**键完全一致**。
+    /// 缺键时 `localizedString(forKey:value:)` 会把 key 原样显示出来 ——
+    /// 界面上会冒出 "panel.key.paste" 这种东西，而且不会有任何报错。
+    @Test("中英词表的键必须一一对应", arguments: ["ClipflowApp", "ClipflowCore"])
+    func keysMatch(target: String) throws {
+        let zh = try strings(target, "zh-Hans")
+        let en = try strings(target, "en")
+        #expect(!zh.isEmpty)
+        let missingEN = Set(zh.keys).subtracting(en.keys).sorted()
+        let missingZH = Set(en.keys).subtracting(zh.keys).sorted()
+        #expect(missingEN.isEmpty, "\(target) 英文缺键：\(missingEN)")
+        #expect(missingZH.isEmpty, "\(target) 中文缺键：\(missingZH)")
+    }
+
+    /// 带 %d / %@ 占位符的条目，两种语言的占位符数量必须一致 ——
+    /// 少一个就是 `String(format:)` 读到野指针，多一个就是崩溃。
+    @Test("格式化占位符数量一致", arguments: ["ClipflowApp", "ClipflowCore"])
+    func placeholdersMatch(target: String) throws {
+        let zh = try strings(target, "zh-Hans")
+        let en = try strings(target, "en")
+        func count(_ s: String) -> Int {
+            s.components(separatedBy: "%").count - 1 - (s.components(separatedBy: "%%").count - 1) * 2
+        }
+        for (k, v) in zh {
+            guard let e = en[k] else { continue }
+            #expect(count(v) == count(e), "\(target) [\(k)] 占位符数量不一致：中「\(v)」英「\(e)」")
+        }
     }
 }

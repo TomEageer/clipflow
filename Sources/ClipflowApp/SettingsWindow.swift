@@ -101,6 +101,16 @@ final class SettingsModel: ObservableObject {
         self.settings = ClipflowSettings.load()
     }
 
+    /// 改语言立刻生效：换掉 lproj 之后 bump 一下，让所有界面重新取词。
+    /// 不走"重启后生效"那套 —— 用户会以为没生效。
+    func setLanguage(_ lang: AppLanguage) {
+        settings.appLanguage = lang.rawValue
+        Loc.override = lang.overrideCode
+        languageTick &+= 1
+        AppDelegate.current?.reloadLocalizedUI()
+    }
+    @Published var languageTick: UInt64 = 0
+
     // MARK: 开机自启
     //
     // 用 SMAppService（macOS 13+）而不是往 LaunchAgents 塞 plist ——
@@ -419,6 +429,21 @@ private struct GeneralTab: View {
                 Text("面板顶部显示的标签")
             } footer: {
                 Text("勾选决定显不显示，拖动决定先后顺序。")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+
+            Section {
+                LabeledContent {
+                    Picker("", selection: Binding(
+                        get: { AppLanguage(rawValue: model.settings.appLanguage) ?? .system },
+                        set: { model.setLanguage($0) })) {
+                        ForEach(AppLanguage.allCases) { Text($0.label).tag($0) }
+                    }.labelsHidden().fixedSize()
+                } label: {
+                    Label(L("settings.language"), systemImage: "globe")
+                }
+            } footer: {
+                Text(L("settings.language.footer"))
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
 
