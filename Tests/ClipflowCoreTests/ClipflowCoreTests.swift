@@ -1777,3 +1777,43 @@ struct LocalizationTests {
         }
     }
 }
+
+// MARK: - 图片 vs 文件引用
+
+@Suite("图片与文件引用的判定")
+struct ImageVsFileRefTests {
+
+    private func classify(_ reps: [(String, Data)]) -> ClipKind? {
+        var snap = RawSnapshot(representations: reps.map { ($0.0, $0.1, 0) })
+        var ctx = IngestContext()
+        _ = TypeClassifier().process(&snap, context: &ctx)
+        return ctx.kind
+    }
+
+    /// ⚠️ 回归测试：微信复制图片曾被标成「文件」。
+    ///
+    /// 不少 App 复制图片时会**同时**给一个指向临时文件的 file-url 和真正的图片数据。
+    /// 先判 file-url 的话这条就成了「文件」，预览是一长串路径 ——
+    /// 而那个路径在 App 自己的容器里，迟早被清掉。图片数据才是本体。
+    @Test("同时有 file-url 和图片数据时，算图片")
+    func imageWinsOverFileURL() {
+        let png = Data([0x89, 0x50, 0x4E, 0x47] + Array(repeating: 0, count: 64))
+        let url = Data("file://localhost/tmp/RWTemp/x.jpg".utf8)
+        #expect(classify([("public.file-url", url), ("public.tiff", png)]) == .image)
+        #expect(classify([("public.tiff", png), ("public.file-url", url)]) == .image)
+    }
+
+    /// 反过来：访达里复制一张 .jpg 只给 file-url、没有图片数据，那它就该是文件。
+    /// 判据是「有没有图片数据」，不是「是不是图片文件」。
+    @Test("只有 file-url 时仍算文件")
+    func fileURLAloneIsFile() {
+        let url = Data("file:///Users/tom/Desktop/photo.jpg".utf8)
+        #expect(classify([("public.file-url", url)]) == .fileRef)
+    }
+
+    @Test("只有图片数据时算图片")
+    func imageAlone() {
+        let png = Data([0x89, 0x50, 0x4E, 0x47] + Array(repeating: 0, count: 64))
+        #expect(classify([("public.png", png)]) == .image)
+    }
+}

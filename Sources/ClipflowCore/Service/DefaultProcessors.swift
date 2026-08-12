@@ -88,14 +88,27 @@ public struct TypeClassifier: IngestProcessor {
     public func process(_ snapshot: inout RawSnapshot, context: inout IngestContext) -> IngestDecision {
         let utis = Set(snapshot.representations.map(\.uti))
 
-        // 文件引用优先判定 —— 剪贴板天生只给路径（实测 200MB 视频 = 76 字节）
-        if utis.contains("public.file-url") {
+        // ⚠️ **有真图片数据时，图片优先于文件引用。**
+        //
+        // 不少 App（微信、飞书、Sketch…）复制图片时会**同时**放一个指向临时文件的
+        // file-url 和一份真正的图片数据。先判 file-url 的话，这条就被标成「文件」、
+        // 预览显示成一长串路径 —— 用户明明复制的是图片。
+        //
+        // 更糟的是那个路径通常在 App 自己的容器里（微信是 temp/RWTemp），迟早被清掉；
+        // 真把它当文件引用，这条以后就打不开了。图片数据才是这条的本体。
+        //
+        // 反过来，在访达里复制一张 .jpg 只给 file-url、没有图片数据，
+        // 那它就该是文件 —— 所以判据是"有没有图片数据"，不是"是不是图片文件"。
+        let hasImageData = utis.contains(where: Self.isImageUTI)
+
+        // 文件引用：剪贴板天生只给路径（实测 200MB 视频 = 76 字节）
+        if utis.contains("public.file-url"), !hasImageData {
             context.kind = .fileRef
             context.preview = Self.text(from: snapshot, uti: "public.file-url")
                 .removingPercentEncoding ?? ""
             return .accept
         }
-        if utis.contains(where: { $0.hasPrefix("public.") && ($0.contains("image") || $0 == "public.png" || $0 == "public.tiff" || $0 == "public.jpeg" || $0 == "public.heic") }) {
+        if hasImageData {
             context.kind = .image
             let bytes = snapshot.representations.reduce(0) { $0 + $1.data.count }
             let size = ByteCountFormatter().string(fromByteCount: Int64(bytes))
@@ -131,6 +144,11 @@ public struct TypeClassifier: IngestProcessor {
             context.kind = .text
         }
         return .accept
+    }
+
+    static func isImageUTI(_ uti: String) -> Bool {
+        uti.hasPrefix("public.") && (uti.contains("image") || uti == "public.png"
+            || uti == "public.tiff" || uti == "public.jpeg" || uti == "public.heic")
     }
 
     static func text(from snapshot: RawSnapshot, uti: String) -> String {
