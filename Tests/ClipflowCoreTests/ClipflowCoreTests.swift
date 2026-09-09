@@ -1817,3 +1817,88 @@ struct ImageVsFileRefTests {
         #expect(classify([("public.png", png)]) == .image)
     }
 }
+
+// MARK: - 编辑原文后落盘
+
+@Suite("编辑原文")
+struct EditOriginalTests {
+
+    private func tempStore() throws -> (ClipflowStore, URL) {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "clipflow-test-\(UUID().uuidString)")
+        return (try ClipflowStore(paths: StoragePaths(root: dir)), dir)
+    }
+
+    /// 改完之后：内容变了、能搜到新词、搜不到旧词。
+    @Test("改写文本后内容与索引都更新")
+    func updateTextPersists() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        let id = try #require(try ingest.ingest(
+            RawSnapshot(representations: [("public.utf8-plain-text", Data("订单支付回调".utf8), 0)])))
+
+        #expect(try store.search("订单支付").count == 1)
+
+        try store.updateText("退款流程说明", itemID: id)
+
+        let reps = try store.representations(of: id)
+        let rep = try #require(reps.first)
+        let d = try #require(try store.data(of: rep))
+        #expect(String(data: d, encoding: .utf8) == "退款流程说明")
+        #expect(try store.search("退款流程").count == 1)
+        #expect(try store.search("订单支付").isEmpty, "旧内容还能搜到 —— 索引没重建")
+        #expect(try store.recent().first?.preview == "退款流程说明")
+    }
+
+    /// ⚠️ 富文本表示必须删掉。
+    /// 只改 plain 的话，粘出去时接收方多半取 html/rtf 那份 ——
+    /// 用户看到的还是改之前的内容，会以为"编辑没生效"。
+    @Test("改写后不再保留过期的富文本表示")
+    func staleRichTextDropped() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        let id = try #require(try ingest.ingest(RawSnapshot(representations: [
+            ("public.utf8-plain-text", Data("原来的字".utf8), 0),
+            ("public.html", Data("<b>原来的字</b>".utf8), 0),
+        ])))
+        #expect(try store.representations(of: id).count == 2)
+
+        try store.updateText("改过的字", itemID: id)
+
+        let reps = try store.representations(of: id)
+        #expect(reps.count == 1)
+        #expect(reps.first?.uti == "public.utf8-plain-text")
+    }
+
+    /// 指纹要跟着变，否则日后再复制**原始那段**内容会命中这条 ——
+    /// 表现为"复制 A，粘出来是改过的 B"。
+    @Test("改写后重新复制原内容不会命中这条")
+    func hashRecomputed() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        let snap = RawSnapshot(representations: [("public.utf8-plain-text", Data("原始内容".utf8), 0)])
+        let id = try #require(try ingest.ingest(snap))
+        try store.updateText("改过之后", itemID: id)
+
+        let again = try #require(try ingest.ingest(snap))
+        #expect(again != id, "重新复制原内容命中了已被改写的那条")
+        #expect(try store.count() == 2)
+    }
+
+    /// 把 JSON 改坏之后就不该再挂着 JSON 标签
+    @Test("类型跟着内容重判")
+    func kindReclassified() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        let id = try #require(try ingest.ingest(
+            RawSnapshot(representations: [("public.utf8-plain-text", Data(#"{"a":1}"#.utf8), 0)])))
+        #expect(try store.recent().first?.kind == .json)
+
+        try store.updateText("就是一句普通的话", itemID: id)
+        #expect(try store.recent().first?.kind == .text)
+    }
+}

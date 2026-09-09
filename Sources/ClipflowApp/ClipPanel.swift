@@ -185,6 +185,31 @@ struct ClipListView: View {
     @State private var dragBase: CGFloat?
 
     var body: some View {
+        VStack(spacing: 0) {
+            dragBar
+            panelContent
+        }
+        .frame(minWidth: 520, maxWidth: .infinity, minHeight: 320, maxHeight: .infinity)
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.primary.opacity(0.08)))
+    }
+
+    /// 顶部拖动条。
+    ///
+    /// ⚠️ **它必须是这一层里最上面的东西，不能被任何 SwiftUI 视图盖住。**
+    /// 之前把 `WindowDragHandle` 塞进搜索行和底栏的 `.background()` 里 ——
+    /// 命中测试全落回 `NSHostingView`，实测合成拖拽位移 dx=0 dy=0，
+    /// 用户报的"面板没法拖动"就是这么来的。抓手的横条由 NSView 自己画，
+    /// 见 `WindowDragHandle.DragView`。
+    private var dragBar: some View {
+        WindowDragHandle()
+            .frame(height: 12)
+            .frame(maxWidth: .infinity)
+            .help(L("panel.drag_hint"))
+    }
+
+    private var panelContent: some View {
         GeometryReader { geo in
             let total = geo.size.width
             let listW = model.listWidth(total: total, theme: t)
@@ -203,10 +228,6 @@ struct ClipListView: View {
             }
             .frame(width: total, height: geo.size.height)
         }
-        .frame(minWidth: 520, maxWidth: .infinity, minHeight: 320, maxHeight: .infinity)
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.primary.opacity(0.08)))
     }
 
     /// 可拖动的分隔条。
@@ -294,12 +315,26 @@ struct ClipListView: View {
     }
 
     private var searchBar: some View {
-        SearchField(text: $model.query, onKey: model.handleKey, fontSize: t.size(14))
-            .padding(.horizontal, 12)
-            .padding(.top, 10).padding(.bottom, 8)
-            // 面板没有标题栏，宿主视图又统一关掉了窗口背景拖拽（见 PanelHostingView），
-            // 所以在这一行的背景上显式还回"可以拖动窗口"的能力。
-            .background(WindowDragHandle())
+        HStack(spacing: 8) {
+            SearchField(text: $model.query, onKey: model.handleKey, fontSize: t.size(14))
+            settingsButton
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 6).padding(.bottom, 8)
+    }
+
+    /// 进设置。面板是这个 App 的主界面，从这里进去才顺手 ——
+    /// 原来只能去菜单栏找，等于每次都要先离开正在做的事。
+    private var settingsButton: some View {
+        Button { model.onOpenSettings?() } label: {
+            Image(systemName: "gearshape")
+                .font(t.font(12))
+                .foregroundStyle(.secondary)
+                .frame(width: t.size(22), height: t.size(20))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(L("panel.settings"))
     }
 
     /// 底部快捷键条。

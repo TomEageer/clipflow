@@ -211,14 +211,19 @@ final class PanelModel: ObservableObject {
         }
     }
 
-    // MARK: 面板内的临时编辑
+    // MARK: 面板内的编辑
     //
-    // ⚠️ **永不写回数据库。** 保真是本项目的地基：库里存的必须永远是复制那一刻的原样。
-    // 这里的修改只作用于「这一次复制 / 粘贴」，切换选中项即丢弃 ——
-    // 所以改完格式化结果或原文，下次再打开这条还是原来的内容。
+    // **原文改了就存**（防抖 600ms + 退出编辑态/切换条目时立刻落盘）——
+    // 这是一个剪贴板管理器，用户改原文就是想把改后的留下；
+    // 让他改完发现没保存，比"保真"这条原则值钱得多。
+    //
+    // **处理结果不存**：它是从原文派生出来的（格式化/编码），存了反而说不清
+    // 这条到底是什么；改坏了点「复原」重算即可。
+    //
+    // ⚠️ 存的时候会**删掉旧的 html/rtf**，见 `ClipflowStore.updateText` 里的说明。
 
-    @Published var editedOriginal: String?
-    @Published var editingOriginal = false
+    @Published var editedOriginal: String? { didSet { scheduleOriginalSave() } }
+    @Published var editingOriginal = false { didSet { if !editingOriginal { flushOriginalEdit() } } }
     @Published var editedProcessed: String?
     @Published var editingProcessed = false
     /// 内容过长时预览是**截断**的。此时必须禁止编辑 ——
@@ -243,8 +248,53 @@ final class PanelModel: ObservableObject {
         Binding(get: { self.processedDisplayText }, set: { self.editedProcessed = $0 })
     }
 
-    func revertOriginal() { editedOriginal = nil; editingOriginal = false }
+    /// 放弃这次还没落盘的改动。已经自动存过的不会回滚 —— 那已经是内容本身了。
+    func revertOriginal() {
+        originalSaveTask?.cancel()
+        originalSaveTask = nil
+        pendingSaveTarget = nil
+        editedOriginal = nil
+        editingOriginal = false
+    }
     func revertProcessed() { editedProcessed = nil; editingProcessed = false }
+
+    private var originalSaveTask: Task<Void, Never>?
+    /// 正在保存的那条 id —— 防抖期间用户可能已经切走，不能拿新选中项去写
+    private var pendingSaveTarget: Int64?
+
+    private func scheduleOriginalSave() {
+        guard let text = editedOriginal, let id = selectedItem?.id else { return }
+        pendingSaveTarget = id
+        originalSaveTask?.cancel()
+        originalSaveTask = Task { [weak self] in
+            // 每敲一个字就写一次库既费又会把 FTS 索引重建到冒烟
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard !Task.isCancelled else { return }
+            self?.commitOriginalEdit(text: text, itemID: id)
+        }
+    }
+
+    /// 立刻落盘（退出编辑态、切换条目、关面板时调用），不等防抖
+    func flushOriginalEdit() {
+        originalSaveTask?.cancel()
+        originalSaveTask = nil
+        guard let text = editedOriginal, let id = pendingSaveTarget else { return }
+        commitOriginalEdit(text: text, itemID: id)
+    }
+
+    private func commitOriginalEdit(text: String, itemID: Int64) {
+        // 截断视图上的编辑绝不能写回 —— 会把后面没显示的那截删掉
+        guard !originalTruncated else { return }
+        do {
+            try store.updateText(text, itemID: itemID)
+            textCache[itemID] = nil
+            editedOriginal = nil
+            pendingSaveTarget = nil
+            reload()
+        } catch {
+            onError?("保存失败：\(error)")
+        }
+    }
 
     private func clearEdits() {
         editedOriginal = nil; editingOriginal = false
@@ -307,6 +357,7 @@ final class PanelModel: ObservableObject {
     private var searchDebounce: Task<Void, Never>?
 
     var onClose: (() -> Void)?
+    var onOpenSettings: (() -> Void)?
     var onError: ((String) -> Void)?
 
     init(store: ClipflowStore, paster: Paster) {
@@ -568,6 +619,8 @@ final class PanelModel: ObservableObject {
 
     func select(_ i: Int, from source: SelectionSource = .mouse) {
         guard i >= 0, i < items.count, i != selection else { return }
+        // 切走之前先把没落盘的编辑写掉，否则改完直接点下一条就丢了
+        flushOriginalEdit()
         selection = i
         popup = .none
         namingDraft = nil

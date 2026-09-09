@@ -62,3 +62,5 @@
 "category.richText" = "富文本";
 "category.color" = "颜色";
 "category.group" = "分组";
+"panel.settings" = "设置";
+"panel.drag_hint" = "拖动这里移动面板";

@@ -62,3 +62,5 @@
 "category.richText" = "Rich Text";
 "category.color" = "Colors";
 "category.group" = "Group";
+"panel.settings" = "Settings";
+"panel.drag_hint" = "Drag here to move the panel";

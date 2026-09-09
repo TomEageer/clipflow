@@ -52,6 +52,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         paster = Paster(watcher: watcher)
         model = PanelModel(store: store, paster: paster)
         model.onClose = { [weak self] in self?.hidePanel() }
+        model.onOpenSettings = { [weak self] in
+            self?.hidePanel()
+            self?.openSettings()
+        }
         model.onPaste = { [weak self] in self?.pasteToPreviousApp() }
         model.onError = { [weak self] msg in self?.notify(msg) }
 
@@ -76,8 +80,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         x: screen.frame.midX - f.width / 2,
                         y: screen.frame.midY - f.height / 2))
                 }
-                self.panel.fadeIn()
-                NSApp.activate(ignoringOtherApps: true)
+                // 演示模式**不走淡入动画**：它是给截图/自动化验证用的，
+                // 而 NSAnimationContext 在这种程序化驱动下常常跑不完，
+                // 结果窗口建出来了 alpha 却停在 0 —— 看着像面板没打开。
+                // 也**不抢焦点**：activate 之后会有杂散按键（实测收到过 Esc）
+                // 打进搜索框，触发 .close 把面板关掉，自动化测量就没得测了。
+                self.panel.alphaValue = 1
+                self.panel.orderFrontRegardless()
             }
         }
     }
@@ -333,7 +342,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    /// 演示/自动化模式：面板保持常开。
+    ///
+    /// 这个模式下 App 不抢焦点，实测仍会有杂散按键打进搜索框（栈里是
+    /// `cancelOperation:` → `.cancel`），面板启动两秒后自己就关了，
+    /// 截图和合成拖拽测量全都没得测。
+    private var demoMode: Bool {
+        ProcessInfo.processInfo.environment["CLIPFLOW_DEMO"] == "1"
+    }
+
     private func hidePanel() {
+        if demoMode { return }
+        // 关面板前把还在防抖里的编辑写掉，否则改完直接关就丢了
+        model.flushOriginalEdit()
         guard panel.isVisible else { return }
         panel.fadeOut { [weak self] in
             guard let self else { return }
