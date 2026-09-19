@@ -55,7 +55,17 @@ public struct ClipItem: Codable, Sendable, FetchableRecord, MutablePersistableRe
     public var contentHash: String
     public var kind: ClipKind
     public var sensitivity: Sensitivity
-    /// 供列表展示与检索的纯文本摘要（图片则为 OCR 前的占位）
+    /// 列表行展示用的纯文本摘要（图片则为尺寸占位）。
+    ///
+    /// ⚠️ **这是摘要，不是全文**，长度上限 `ClipItem.previewLimit`。
+    /// 全文在 `representations` 里（超过 512B 会 LZFSE 压缩进 CAS），
+    /// 检索靠 `items_fts`。三者各司其职：
+    /// - `preview` —— 画一行列表、判搜索排序里的"标题前缀"
+    /// - `representations` —— 保真原文，粘贴和编辑都走它
+    /// - `items_fts` —— 全文召回
+    ///
+    /// 曾经这里存的是整篇原文（实测最长一条 1.26 MB，全库 12 MB / 总 20 MB），
+    /// 等于把已经压缩存过一遍的内容再不压缩存一遍，列表画一行也要读进来。
     public var preview: String
     public var createdAt: Date
     public var lastUsedAt: Date
@@ -125,6 +135,18 @@ public struct ClipItem: Codable, Sendable, FetchableRecord, MutablePersistableRe
     public var displayTitle: String {
         if let n = name, !n.isEmpty { return n }
         return preview
+    }
+
+    /// `preview` 的长度上限。
+    ///
+    /// 取 2000 而不是"够画一行就行"：搜索排序要判"标题以查询词开头"，
+    /// 而标题是首个非空行 —— 有些内容前面顶着十几行空白或 BOM，
+    /// 砍太狠会把真正的首行砍没。2000 字对全库 5893 条来说只有 ~1.5 MB。
+    public static let previewLimit = 2000
+
+    /// 按上限裁剪出 `preview`。入库和改写原文都必须走这里，别在调用点各切各的。
+    public static func makePreview(_ text: String) -> String {
+        text.count > previewLimit ? String(text.prefix(previewLimit)) : text
     }
 }
 

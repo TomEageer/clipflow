@@ -58,8 +58,9 @@ extension ClipflowStore {
             try rep.insert(db)
             try db.execute(sql: """
                 UPDATE items SET contentHash = ?, preview = ?, byteSize = ?, kind = ? WHERE id = ?
-                """, arguments: [newHash, text, data.count, kind.rawValue, itemID])
+                """, arguments: [newHash, ClipItem.makePreview(text), data.count,
+                                   kind.rawValue, itemID])
         }
-        try reindex(itemID: itemID)
+        try indexDocument(itemID: itemID, fullText: text)
     }
 }

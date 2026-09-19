@@ -93,23 +93,6 @@ extension ClipflowStore {
         try contentPool.write { db in
             try db.execute(sql: "UPDATE items SET name = ? WHERE id = ?", arguments: [final, itemID])
         }
-        try reindex(itemID: itemID)
-    }
-
-    /// 按 items 表的当前内容重建这条的检索行（名字 + 摘要）。
-    /// contentless FTS 不支持 UPDATE，只能先删后插。
-    public func reindex(itemID: Int64) throws {
-        let row: (name: String?, preview: String)? = try contentPool.read { db in
-            guard let r = try Row.fetchOne(db, sql: "SELECT name, preview FROM items WHERE id = ?",
-                                           arguments: [itemID]) else { return nil }
-            return (r["name"] as String?, r["preview"] as String)
-        }
-        guard let row else { return }
-        let text = [row.name, row.preview].compactMap { $0 }.joined(separator: "\n")
-        try indexPoolWrite { db in
-            try db.execute(sql: "DELETE FROM items_fts WHERE rowid = ?", arguments: [itemID])
-            try db.execute(sql: "INSERT INTO items_fts(rowid, tok) VALUES (?, ?)",
-                           arguments: [itemID, BigramTokenizer.tokenize(text)])
-        }
+        try indexDocument(itemID: itemID)
     }
 }

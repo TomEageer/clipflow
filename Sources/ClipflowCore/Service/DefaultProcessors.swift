@@ -65,7 +65,7 @@ public struct SensitivityClassifier: IngestProcessor {
     }()
 
     public func process(_ snapshot: inout RawSnapshot, context: inout IngestContext) -> IngestDecision {
-        let text = context.preview
+        let text = context.text
         guard !text.isEmpty, text.count < 20_000 else { return .accept }
         let range = NSRange(text.startIndex..., in: text)
         for (name, re) in Self.patterns {
@@ -104,7 +104,7 @@ public struct TypeClassifier: IngestProcessor {
         // 文件引用：剪贴板天生只给路径（实测 200MB 视频 = 76 字节）
         if utis.contains("public.file-url"), !hasImageData {
             context.kind = .fileRef
-            context.preview = Self.text(from: snapshot, uti: "public.file-url")
+            context.text = Self.text(from: snapshot, uti: "public.file-url")
                 .removingPercentEncoding ?? ""
             return .accept
         }
@@ -116,12 +116,12 @@ public struct TypeClassifier: IngestProcessor {
             let dims = snapshot.representations
                 .compactMap { ThumbnailStore.pixelSize(of: $0.data) }
                 .first
-            context.preview = dims.map { "图片 \($0.width)×\($0.height) · \(size)" } ?? "图片 · \(size)"
+            context.text = dims.map { "图片 \($0.width)×\($0.height) · \(size)" } ?? "图片 · \(size)"
             return .accept
         }
 
         let plain = Self.text(from: snapshot, uti: "public.utf8-plain-text")
-        context.preview = plain
+        context.text = plain
 
         // ⚠️ JSON 判定必须排在 richText **前面**。
         // 从网页或日志里选中一段 JSON 复制，剪贴板上同时有 html/rtf，

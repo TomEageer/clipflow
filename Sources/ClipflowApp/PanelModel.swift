@@ -499,12 +499,8 @@ final class PanelModel: ObservableObject {
             if q.isEmpty {
                 items = try store.recent(limit: 200, kinds: kinds, groupID: gid)
             } else {
-                // 搜索结果再按分类筛。搜索已限量，客户端筛的代价可忽略。
-                let hits = try store.search(q, limit: 400)
-                var filtered = kinds.map { k in hits.filter { k.contains($0.kind) } } ?? hits
-                if let gid { filtered = filtered.filter { $0.groupID == gid } }
-                items = filtered
-                if items.count > 200 { items = Array(items.prefix(200)) }
+                // 分类过滤交给 SQL —— 客户端筛会出现"这个标签页下明明有却一条不显示"
+                items = try store.search(q, limit: 200, kinds: kinds, groupID: gid)
             }
             t = perf("recent/search", t)
             counts = (try? store.countsByKind()) ?? [:]
@@ -570,12 +566,7 @@ final class PanelModel: ObservableObject {
     func fullTextInfo(for item: ClipItem) -> (text: String, truncated: Bool) {
         guard let id = item.id else { return (item.preview, false) }
         if let c = textCache[id] { return c }
-        var text = item.preview
-        if let reps = try? store.representations(of: id),
-           let plain = reps.first(where: { $0.uti == "public.utf8-plain-text" }),
-           let d = try? store.data(of: plain), let s = String(data: d, encoding: .utf8) {
-            text = s
-        }
+        var text = store.plainText(of: id) ?? item.preview
         // 别把 10MB 文本塞进视图
         var truncated = false
         if text.count > 20_000 {

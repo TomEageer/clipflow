@@ -113,6 +113,18 @@ public enum Migrations {
             }
         }
 
+        // preview 从"整篇原文"收敛成"列表摘要"。
+        //
+        // 之前它存的是全文：实测最长一条 1.26 MB，全库 12 MB / 总 20 MB，
+        // 而同样的内容在 representations 里已经压缩存过一遍了。列表画一行也要把它读进来。
+        //
+        // ⚠️ **不需要重建 FTS**：历史索引行正是按当时的 preview（= 全文）建的，
+        // 截断 preview 不动索引，召回一条不少。全文仍可从 representations 取回。
+        m.registerMigration("v5_preview_is_excerpt") { db in
+            try db.execute(sql: "UPDATE items SET preview = substr(preview, 1, ?) WHERE length(preview) > ?",
+                           arguments: [ClipItem.previewLimit, ClipItem.previewLimit])
+        }
+
         return m
     }
 

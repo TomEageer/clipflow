@@ -49,8 +49,12 @@ public final class ClipflowStore: Sendable {
 
     /// 写入一个条目及其全部 representation。
     /// contentHash 命中已有条目则只更新 lastUsedAt / useCount，不新建行。
+    ///
+    /// - Parameter fullText: 这一条的全文。`item.preview` 只是裁剪过的摘要，
+    ///   建索引要的是全文；入库时它还在调用方手上，传进来省一次读盘解压。
     @discardableResult
-    public func insert(item: ClipItem, representations: [Representation]) throws -> Int64 {
+    public func insert(item: ClipItem, representations: [Representation],
+                       fullText: String? = nil) throws -> Int64 {
         let existingID: Int64? = try contentPool.read { db in
             try Int64.fetchOne(db, sql: "SELECT id FROM items WHERE contentHash = ?",
                                arguments: [item.contentHash])
@@ -80,11 +84,8 @@ public final class ClipflowStore: Sendable {
             return id
         }
 
-        // 敏感条目不入索引 —— 索引里存的 bigram 分词拼起来接近原文，等于明文泄漏
-        if item.sensitivity == .normal {
-            // 名字也要进索引（入库时还没有名字，重命名时走 reindex 补）
-            try indexFTS(itemID: newID, text: item.preview)
-        }
+        // 入库时全文还在手上，直接传进去，省一次读盘解压
+        try indexDocument(itemID: newID, fullText: fullText ?? item.preview)
         return newID
     }
 
@@ -94,14 +95,6 @@ public final class ClipflowStore: Sendable {
     }
     func indexPoolRead<T>(_ block: (Database) throws -> T) throws -> T {
         try indexPool.read(block)
-    }
-
-    public func indexFTS(itemID: Int64, text: String) throws {
-        let tok = BigramTokenizer.tokenize(text)
-        try indexPool.write { db in
-            try db.execute(sql: "INSERT INTO items_fts(rowid, tok) VALUES (?, ?)",
-                           arguments: [itemID, tok])
-        }
     }
 
     // MARK: 读取
@@ -166,28 +159,122 @@ public final class ClipflowStore: Sendable {
 
     /// 全文检索。
     ///
-    /// ⚠️ 排序用 `fts.rowid DESC` 而不是 `ORDER BY rank`。
+    /// **结果分三层排，层内一律按 usedSeq 倒序（越近越靠前）：**
+    /// 1. 锚定命中 —— 名字或标题（首个非空行）以查询词开头，完全相等排最前；
+    /// 2. 模糊命中 —— 出现在内容任意位置；
+    /// 3. 两层内部都按最近使用排。
+    ///
+    /// 为什么要分层：索引是**字符级**的（拉丁文按单字符、汉字按 bigram），搜 `user`
+    /// 会把每条路径里含 `/Users/` 的都算命中 —— 实测 5893 条库里命中 756 条，
+    /// 想要的那条淹在里面，用户看到的就是"搜不出来"。分层只改顺序不改召回。
+    ///
+    /// 为什么锚定命中要**单独走一条 SQL**、不从 FTS 结果里挑：FTS 只能给"最近 N 条
+    /// 命中"，一条三个月前的精确匹配会被几百条新的模糊命中挤出候选集，再怎么排也排不出来。
+    ///
+    /// ⚠️ 模糊层取候选仍用 `fts.rowid DESC`，**不是 `ORDER BY rank`**。
     /// 实测：2 万条命中时 rank 要 46ms（必须给每条打 BM25 分），rowid DESC 只要 0.30ms —— **快 150 倍**。
-    /// 且剪贴板用户要的本来就是「最近的」不是「最相关的」，**又快又更对**。
-    public func search(_ query: String, limit: Int = 50) throws -> [ClipItem] {
+    /// 剪贴板用户要的本来就是「最近的」不是「最相关的」。
+    ///
+    /// ⚠️ `kinds` / `groupID` 的过滤必须**进 SQL**，不能取回来再筛 ——
+    /// 否则"最近 400 条命中里一条文本都没有"时，在「文本」标签页下就是一片空白
+    /// （和 `recent` 那条注释是同一个坑）。
+    public func search(_ query: String, limit: Int = 50,
+                       kinds: Set<ClipKind>? = nil,
+                       groupID: Int64? = nil) throws -> [ClipItem] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return [] }
+
+        var merged: [Int64: ClipItem] = [:]
+        for item in try anchoredMatches(q, limit: limit, kinds: kinds, groupID: groupID) {
+            if let id = item.id { merged[id] = item }
+        }
+        for item in try fuzzyMatches(q, limit: limit, kinds: kinds, groupID: groupID) {
+            if let id = item.id { merged[id] = item }
+        }
+        guard !merged.isEmpty else { return [] }
+
+        let ranked = merged.values.map {
+            (item: $0, tier: SearchRanker.tier(query: q, name: $0.name, preview: $0.preview))
+        }
+        return ranked
+            .sorted {
+                $0.tier == $1.tier ? $0.item.usedSeq > $1.item.usedSeq : $0.tier < $1.tier
+            }
+            .prefix(limit)
+            .map(\.item)
+    }
+
+    /// 锚定命中：名字或标题以查询词开头（完全相等是它的特例）。
+    ///
+    /// ⚠️ **必须自己挡住敏感条目。** 这条路径直接查 `items` 表、不经过索引，
+    /// 而"密钥/密码搜不到"本来是靠**不进索引**实现的 ——
+    /// 少了这个条件敏感内容就从这里漏出来了（被既有测试逮到过）。
+    ///
+    /// `ltrim` 是必须的：不少内容首行前面顶着换行或缩进，
+    /// 不去掉的话"以查询词开头"永远不成立。
+    private func anchoredMatches(_ query: String, limit: Int,
+                                 kinds: Set<ClipKind>?, groupID: Int64?) throws -> [ClipItem] {
+        let pattern = SearchRanker.escapeLike(query) + "%"
+
+        return try contentPool.read { db in
+            var where_ = """
+                sensitivity = :normal
+                AND (name LIKE :p ESCAPE '\\'
+                     OR ltrim(preview, char(10) || char(13) || char(9) || ' ') LIKE :p ESCAPE '\\')
+                """
+            var args: [String: (any DatabaseValueConvertible)?] = [
+                "p": pattern, "limit": limit, "normal": Sensitivity.normal.rawValue,
+            ]
+            if let kinds, !kinds.isEmpty {
+                let keys = kinds.enumerated().map { ":k\($0.offset)" }
+                where_ += " AND kind IN (\(keys.joined(separator: ", ")))"
+                for (i, k) in kinds.enumerated() { args["k\(i)"] = k.rawValue }
+            }
+            if let groupID {
+                where_ += " AND groupID = :gid"
+                args["gid"] = groupID
+            }
+            return try ClipItem.fetchAll(db, sql: """
+                SELECT * FROM items WHERE \(where_)
+                ORDER BY usedSeq DESC LIMIT :limit
+                """, arguments: StatementArguments(args))
+        }
+    }
+
+    /// 模糊命中：走 FTS 拿候选，再回内容库按分类取。
+    private func fuzzyMatches(_ query: String, limit: Int,
+                              kinds: Set<ClipKind>?, groupID: Int64?) throws -> [ClipItem] {
         guard let expr = BigramTokenizer.matchExpression(for: query) else { return [] }
+
+        // 带分类过滤时多要一些候选 —— 过滤发生在候选之后，
+        // 候选给得太少会出现"这个标签页下明明有，却一条都不显示"。
+        let filtered = (kinds?.isEmpty == false) || groupID != nil
+        let candidateLimit = min(2000, max(limit, 200) * (filtered ? 6 : 1))
 
         let ids: [Int64] = try indexPool.read { db in
             try Int64.fetchAll(db, sql: """
                 SELECT rowid FROM items_fts WHERE items_fts MATCH ?
                 ORDER BY rowid DESC LIMIT ?
-                """, arguments: [expr, limit])
+                """, arguments: [expr, candidateLimit])
         }
         guard !ids.isEmpty else { return [] }
 
         return try contentPool.read { db in
-            let placeholders = databaseQuestionMarks(count: ids.count)
-            let items = try ClipItem.fetchAll(db, sql: """
-                SELECT * FROM items WHERE id IN (\(placeholders))
-                """, arguments: StatementArguments(ids))
-            // 保持索引给出的顺序（最近优先）
-            let byID = Dictionary(uniqueKeysWithValues: items.compactMap { i in i.id.map { ($0, i) } })
-            return ids.compactMap { byID[$0] }
+            var where_ = "id IN (\(databaseQuestionMarks(count: ids.count)))"
+            var args: [any DatabaseValueConvertible] = ids
+            if let kinds, !kinds.isEmpty {
+                where_ += " AND kind IN (\(databaseQuestionMarks(count: kinds.count)))"
+                args += kinds.map(\.rawValue)
+            }
+            if let groupID {
+                where_ += " AND groupID = ?"
+                args.append(groupID)
+            }
+            args.append(limit)
+            return try ClipItem.fetchAll(db, sql: """
+                SELECT * FROM items WHERE \(where_)
+                ORDER BY usedSeq DESC LIMIT ?
+                """, arguments: StatementArguments(args))
         }
     }
 

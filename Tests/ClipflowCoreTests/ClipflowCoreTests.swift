@@ -1902,3 +1902,160 @@ struct EditOriginalTests {
         #expect(try store.recent().first?.kind == .text)
     }
 }
+
+// MARK: - 搜索排序
+
+@Suite("搜索排序")
+struct SearchRankingTests {
+
+    private func tempStore() throws -> (ClipflowStore, URL) {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "clipflow-test-\(UUID().uuidString)")
+        return (try ClipflowStore(paths: StoragePaths(root: dir)), dir)
+    }
+
+    private func put(_ ingest: IngestService, _ text: String) throws {
+        try ingest.ingest(RawSnapshot(representations: [("public.utf8-plain-text", Data(text.utf8), 0)]))
+    }
+
+    @Test("分层：全匹配 > 前缀 > 全模糊")
+    func tiers() throws {
+        #expect(SearchRanker.tier(query: "user", name: nil, preview: "user") == .titleExact)
+        #expect(SearchRanker.tier(query: "user", name: nil, preview: "userName") == .titlePrefix)
+        #expect(SearchRanker.tier(query: "user", name: nil, preview: "/Users/tom") == .fuzzy)
+        #expect(SearchRanker.tier(query: "user", name: "user", preview: "随便") == .nameExact)
+        #expect(SearchRanker.tier(query: "user", name: "userInfo", preview: "随便") == .namePrefix)
+        // 大小写不参与判定
+        #expect(SearchRanker.tier(query: "select", name: nil, preview: "SELECT *") == .titlePrefix)
+        // 标题是首个非空行，不是整段
+        #expect(SearchRanker.tier(query: "select", name: nil, preview: "\n\n  select * from t\nx") == .titlePrefix)
+    }
+
+    /// 用户报的原始症状：搜 user 全是路径里含 /Users/ 的，想要的 userName 一条都看不到。
+    @Test("前缀命中排在模糊命中前面")
+    func prefixBeatsFuzzy() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+
+        try put(ingest, "userName")                 // 前缀命中，最早
+        for i in 0..<30 { try put(ingest, "/Users/tom/path/\(i)") }   // 模糊命中，更近
+
+        let hits = try store.search("user", limit: 50)
+        #expect(hits.first?.preview == "userName")
+        #expect(hits.count == 31)                   // 模糊命中一条不少，只是排后面
+    }
+
+    @Test("同一层内按最近优先")
+    func recentFirstWithinTier() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        try put(ingest, "userA")
+        try put(ingest, "userB")
+        try put(ingest, "userC")
+
+        let hits = try store.search("user", limit: 10)
+        #expect(hits.map(\.preview) == ["userC", "userB", "userA"])
+    }
+
+    /// 锚定命中必须单独查库。只从 FTS 的「最近 N 条命中」里挑，
+    /// 一条老的精确匹配会被新的模糊命中挤出候选集 —— 这就是「老是查不出来」。
+    @Test("老的精确匹配不会被新的模糊命中挤掉")
+    func oldExactSurvivesTruncation() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+
+        try put(ingest, "token")
+        for i in 0..<300 { try put(ingest, "这里有个 token 在中间 \(i)") }
+
+        let hits = try store.search("token", limit: 20)
+        #expect(hits.first?.preview == "token")
+    }
+
+    @Test("分类过滤走 SQL，不会因候选截断而空白")
+    func kindFilterInSQL() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+
+        try ingest.ingest(RawSnapshot(representations: [("public.file-url", Data("file:///abc/token.txt".utf8), 0)]))
+        for i in 0..<250 { try put(ingest, "token \(i)") }
+
+        let files = try store.search("token", limit: 20, kinds: [.fileRef])
+        #expect(files.count == 1)
+        #expect(files.first?.kind == .fileRef)
+    }
+
+    @Test("LIKE 通配符被转义：搜 100% 不等于搜以 100 开头")
+    func escapesLikeWildcards() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        try put(ingest, "100%")
+        try put(ingest, "1000 元")
+
+        let hits = try store.search("100%", limit: 10)
+        // "1000 元" 仍会作为模糊命中出现 —— FTS 的 unicode61 把 % 当标点剥掉了，
+        // 这是分词器的既定行为。转义保证的是它**不被算成前缀命中**排到前面去。
+        #expect(hits.first?.preview == "100%")
+        #expect(SearchRanker.tier(query: "100%", name: nil, preview: "1000 元") == .fuzzy)
+    }
+}
+
+// MARK: - preview 是摘要不是全文
+
+@Suite("preview 与索引的分工")
+struct PreviewAndIndexTests {
+
+    private func tempStore() throws -> (ClipflowStore, URL) {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "clipflow-test-\(UUID().uuidString)")
+        return (try ClipflowStore(paths: StoragePaths(root: dir)), dir)
+    }
+
+    @Test("preview 被裁到上限，全文仍可取回")
+    func previewIsBounded() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let long = String(repeating: "甲", count: ClipItem.previewLimit * 3)
+        try IngestService(store: store).ingest(
+            RawSnapshot(representations: [("public.utf8-plain-text", Data(long.utf8), 0)]))
+
+        let item = try #require(try store.recent(limit: 1).first)
+        #expect(item.preview.count == ClipItem.previewLimit)
+        let id = try #require(item.id)
+        #expect(store.plainText(of: id)?.count == long.count)
+    }
+
+    /// preview 收敛成摘要之后，索引必须从**全文**建 ——
+    /// 否则超过 2000 字的内容，后半截会悄无声息地搜不到。
+    @Test("索引建在全文上，超出 preview 的部分也能搜到")
+    func indexesFullText() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let long = String(repeating: "甲", count: ClipItem.previewLimit) + "尾部暗号"
+        try IngestService(store: store).ingest(
+            RawSnapshot(representations: [("public.utf8-plain-text", Data(long.utf8), 0)]))
+
+        #expect(try store.search("尾部暗号", limit: 10).count == 1)
+    }
+
+    /// 改名走的是同一个建索引入口。要是它按 preview 重建，
+    /// 一次改名就会把这条的可搜范围砍到前 2000 字。
+    @Test("改名不会砍掉正文的可搜范围")
+    func renameKeepsFullTextSearchable() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let long = String(repeating: "乙", count: ClipItem.previewLimit) + "尾部暗号"
+        try IngestService(store: store).ingest(
+            RawSnapshot(representations: [("public.utf8-plain-text", Data(long.utf8), 0)]))
+        let id = try #require(try store.recent(limit: 1).first?.id)
+
+        try store.setName("我的备注", itemID: id)
+
+        #expect(try store.search("尾部暗号", limit: 10).count == 1)
+        #expect(try store.search("我的备注", limit: 10).count == 1)
+    }
+}

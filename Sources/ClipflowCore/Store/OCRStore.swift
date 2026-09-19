@@ -66,7 +66,8 @@ extension ClipflowStore {
             try db.execute(sql: "DELETE FROM ocr_queue WHERE itemID = ?", arguments: [itemID])
         }
         guard !sensitive, !result.text.isEmpty else { return }
-        try reindex(itemID: itemID, extraText: result.text)
+        // OCR 文本由 indexDocument 自己从 items_ocr 取，这里只要触发重建
+        try indexDocument(itemID: itemID)
     }
 
     /// 无文字或识别失败：记录状态，避免反复重试同一张图。
@@ -79,19 +80,6 @@ extension ClipflowStore {
                 try db.execute(sql: "UPDATE ocr_queue SET attempts = attempts + 1 WHERE itemID = ?",
                                arguments: [itemID])
             }
-        }
-    }
-
-    /// 把某条重新写进索引，可附加 OCR 文本。
-    public func reindex(itemID: Int64, extraText: String? = nil) throws {
-        guard let item = try item(id: itemID), item.sensitivity == .normal else { return }
-        var text = item.preview
-        if let extraText, !extraText.isEmpty { text += "\n" + extraText }
-        let tok = BigramTokenizer.tokenize(text)
-        try indexPoolWrite { db in
-            try db.execute(sql: "DELETE FROM items_fts WHERE rowid = ?", arguments: [itemID])
-            try db.execute(sql: "INSERT INTO items_fts(rowid, tok) VALUES (?, ?)",
-                           arguments: [itemID, tok])
         }
     }
 

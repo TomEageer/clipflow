@@ -42,7 +42,9 @@ public protocol IngestProcessor: Sendable {
 public struct IngestContext: Sendable {
     public var kind: ClipKind = .other
     public var sensitivity: Sensitivity = .normal
-    public var preview: String = ""
+    /// 这一条的**全文**纯文本（图片则是尺寸占位）。
+    /// 分类、敏感识别、建索引都读它；写进 `items.preview` 的是它裁剪后的摘要。
+    public var text: String = ""
     public var notes: [String] = []
 }
 
@@ -101,7 +103,7 @@ public struct IngestService: Sendable {
             contentHash: contentHash,
             kind: ctx.kind,
             sensitivity: ctx.sensitivity,
-            preview: ctx.preview,
+            preview: ClipItem.makePreview(ctx.text),
             createdAt: snap.capturedAt,
             lastUsedAt: snap.capturedAt,
             sourceBundleID: snap.sourceBundleID,
@@ -132,7 +134,7 @@ public struct IngestService: Sendable {
             }
         }
 
-        let id = try store.insert(item: item, representations: reps)
+        let id = try store.insert(item: item, representations: reps, fullText: ctx.text)
 
         // 图片排队等 OCR。**不阻塞入库** —— OCR 是秒级任务，先落库再慢慢做。
         if ctx.kind == .image, ctx.sensitivity == .normal {
