@@ -111,7 +111,7 @@ func printItems(_ items: [ClipItem]) {
         let items = try store.search(q, limit: limit)
         printItems(items)
         print("\n\(items.count) 条 · \(String(format: "%.2f", Date().timeIntervalSince(t0) * 1000))ms"
-              + "  （分层排序：全匹配 > 前缀 > 全模糊，层内按最近优先）")
+              + "  （分层：全匹配 > 前缀 > 词元命中 > 子串兜底，层内按最近优先）")
 
     case "show":
         guard let idStr = args.first, let id = Int64(idStr) else { print("需要 id"); exit(1) }

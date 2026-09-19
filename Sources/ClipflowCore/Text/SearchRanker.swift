@@ -16,8 +16,10 @@ public enum SearchTier: Int, Sendable, Comparable, CaseIterable {
     case namePrefix = 2
     /// 标题以查询词开头（「后缀模糊」：abc%）
     case titlePrefix = 3
-    /// 出现在内容任意位置（「全模糊」：%abc%）
+    /// 词元索引命中：正文里有以查询词开头的词（「全模糊」）
     case fuzzy = 4
+    /// 只有 LIKE 兜底命中：查询词卡在某个词的中间
+    case substring = 5
 
     public static func < (a: SearchTier, b: SearchTier) -> Bool { a.rawValue < b.rawValue }
 }

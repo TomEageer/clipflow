@@ -191,10 +191,26 @@ public final class ClipflowStore: Sendable {
         for item in try fuzzyMatches(q, limit: limit, kinds: kinds, groupID: groupID) {
             if let id = item.id { merged[id] = item }
         }
+        // 索引表达不了的查询走 LIKE 兜底（词中间的片段、单个汉字）。
+        // 只在前两层没填满时才跑 —— 常见查询根本走不到这里。
+        var viaFallbackOnly: Set<Int64> = []
+        if merged.count < limit {
+            for item in try substringMatches(q, limit: limit - merged.count,
+                                             kinds: kinds, groupID: groupID) {
+                if let id = item.id, merged[id] == nil {
+                    merged[id] = item
+                    viaFallbackOnly.insert(id)
+                }
+            }
+        }
         guard !merged.isEmpty else { return [] }
 
-        let ranked = merged.values.map {
-            (item: $0, tier: SearchRanker.tier(query: q, name: $0.name, preview: $0.preview))
+        // 分层看**从哪条路径来的**，不能只看文本：只有 LIKE 兜底捞到的，
+        // 说明查询词卡在某个词中间，相关性比"正文里有个词以它开头"低一档。
+        // 光看 preview 判断不出来 —— 索引命中的位置可能在 2000 字之外。
+        let ranked = merged.map { id, item -> (item: ClipItem, tier: SearchTier) in
+            let t = SearchRanker.tier(query: q, name: item.name, preview: item.preview)
+            return (item, viaFallbackOnly.contains(id) && t == .fuzzy ? .substring : t)
         }
         return ranked
             .sorted {
@@ -221,6 +237,49 @@ public final class ClipflowStore: Sendable {
                 sensitivity = :normal
                 AND (name LIKE :p ESCAPE '\\'
                      OR ltrim(preview, char(10) || char(13) || char(9) || ' ') LIKE :p ESCAPE '\\')
+                """
+            var args: [String: (any DatabaseValueConvertible)?] = [
+                "p": pattern, "limit": limit, "normal": Sensitivity.normal.rawValue,
+            ]
+            if let kinds, !kinds.isEmpty {
+                let keys = kinds.enumerated().map { ":k\($0.offset)" }
+                where_ += " AND kind IN (\(keys.joined(separator: ", ")))"
+                for (i, k) in kinds.enumerated() { args["k\(i)"] = k.rawValue }
+            }
+            if let groupID {
+                where_ += " AND groupID = :gid"
+                args["gid"] = groupID
+            }
+            return try ClipItem.fetchAll(db, sql: """
+                SELECT * FROM items WHERE \(where_)
+                ORDER BY usedSeq DESC LIMIT :limit
+                """, arguments: StatementArguments(args))
+        }
+    }
+
+    /// 子串兜底：`LIKE '%q%'`。
+    ///
+    /// 为什么需要它：词元索引表达不了两类查询 ——
+    /// **词中间的片段**（搜订单号中段 `1401393` 找 `2608191401393454887`）和
+    /// **单个汉字**（索引里存的是 bigram，没有单字词元）。
+    /// 这是各家的通行做法：SQLite 自带的 trigram 分词器也搞不定少于 3 字的查询，
+    /// 相关方案一律拿 LIKE 补这一段。
+    ///
+    /// 为什么不干脆换 trigram 分词器：它对**两个汉字**的查询就已经无能为力了
+    /// （订单、支付、密码全废），而且索引膨胀自然语言约 3×、结构化数据实测到过 18×
+    /// —— 剪贴板里全是 JSON/SQL/日志，正踩在最坏情况上。
+    ///
+    /// ⚠️ 只扫 `preview`（摘要，上限 2000 字），扫不到正文深处 ——
+    /// 全文在 CAS 里压着，逐条解压来做 LIKE 是不可接受的。
+    /// 这是有意的取舍：兜底就该便宜。实测全表 2 MB，一次约 8ms。
+    private func substringMatches(_ query: String, limit: Int,
+                                  kinds: Set<ClipKind>?, groupID: Int64?) throws -> [ClipItem] {
+        let pattern = "%" + SearchRanker.escapeLike(query) + "%"
+
+        return try contentPool.read { db in
+            var where_ = """
+                sensitivity = :normal
+                AND (name LIKE :p ESCAPE '\\' OR preview LIKE :p ESCAPE '\\')
                 """
             var args: [String: (any DatabaseValueConvertible)?] = [
                 "p": pattern, "limit": limit, "normal": Sensitivity.normal.rawValue,

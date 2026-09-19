@@ -2138,7 +2138,47 @@ struct SearchPrecisionTests {
         let hits = try store.search("user", limit: 10).map(\.preview)
         #expect(hits.contains("userName"))
         #expect(hits.contains("/Users/tom/projects"))
-        #expect(hits.contains("abuser") == false)
+        // abuser 只在 LIKE 兜底层出现（user 卡在词中间），必须排在索引命中之后
+        #expect(hits.last == "abuser")
+        #expect(hits.firstIndex(of: "/Users/tom/projects")! < hits.firstIndex(of: "abuser")!)
+    }
+
+    /// 词元索引表达不了的两类查询，靠 LIKE 兜底。各家方案都这么补。
+    @Test("词中间的片段也能搜到，且排在最后")
+    func substringFallback() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        try put(ingest, "订单:2608191401393454887i402702")
+        try put(ingest, "1401393 开头的这条")
+
+        let hits = try store.search("1401393", limit: 10).map(\.preview)
+        #expect(hits.count == 2)
+        #expect(hits.first == "1401393 开头的这条")          // 前缀命中在前
+        #expect(hits.last!.contains("2608191401393454887"))  // 中段命中在后
+    }
+
+    @Test("单个汉字能搜到（索引里只有 bigram，靠 LIKE 兜底）")
+    func singleIdeographQuery() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        try put(ingest, "订单支付回调")
+
+        #expect(try store.search("单", limit: 10).count == 1)
+    }
+
+    @Test("兜底层同样挡敏感条目")
+    func fallbackBlocksSensitive() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        try put(ingest, "api_key = sk-abcdefXUtnFEM0123456789")
+
+        let all = try store.recent(limit: 10)
+        #expect(all.first?.sensitivity == .sensitive)
+        #expect(try store.search("api_key", limit: 10).isEmpty)
+        #expect(try store.search("XUtnFEM", limit: 10).isEmpty)   // 中段，走兜底层
     }
 
     @Test("中文短语查询不退化成 AND")
