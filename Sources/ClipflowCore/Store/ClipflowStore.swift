@@ -222,22 +222,36 @@ public final class ClipflowStore: Sendable {
 
     /// 锚定命中：名字或标题以查询词开头（完全相等是它的特例）。
     ///
+    /// ⚠️ **必须拆成两条查询，不能写成 `name LIKE ? OR titleKey LIKE ?`。**
+    /// 一个 OR 就让 SQLite 放弃两边的索引掉回全表扫（实测查询计划从
+    /// `SEARCH USING INDEX idx_items_titleKey` 变成 `SCAN items`）。
+    ///
     /// ⚠️ **必须自己挡住敏感条目。** 这条路径直接查 `items` 表、不经过索引，
     /// 而"密钥/密码搜不到"本来是靠**不进索引**实现的 ——
     /// 少了这个条件敏感内容就从这里漏出来了（被既有测试逮到过）。
     ///
-    /// `ltrim` 是必须的：不少内容首行前面顶着换行或缩进，
-    /// 不去掉的话"以查询词开头"永远不成立。
+    /// `titleKey` 是虚拟生成列（见 v6 迁移），带 `COLLATE NOCASE` 索引，
+    /// 所以 `LIKE 'q%'` 走的是索引区间扫描而不是全表扫：
+    /// 5 万条实测 8~10ms → 0.023ms。
     private func anchoredMatches(_ query: String, limit: Int,
                                  kinds: Set<ClipKind>?, groupID: Int64?) throws -> [ClipItem] {
         let pattern = SearchRanker.escapeLike(query) + "%"
+        var out: [ClipItem] = []
+        var seen: Set<Int64> = []
+        for column in ["titleKey", "name"] {
+            for item in try prefixMatches(column: column, pattern: pattern,
+                                          limit: limit, kinds: kinds, groupID: groupID) {
+                if let id = item.id, seen.insert(id).inserted { out.append(item) }
+            }
+        }
+        return out
+    }
 
-        return try contentPool.read { db in
-            var where_ = """
-                sensitivity = :normal
-                AND (name LIKE :p ESCAPE '\\'
-                     OR ltrim(preview, char(10) || char(13) || char(9) || ' ') LIKE :p ESCAPE '\\')
-                """
+    /// 单列前缀查询。`column` 只取代码里写死的列名，不接受外部输入。
+    private func prefixMatches(column: String, pattern: String, limit: Int,
+                               kinds: Set<ClipKind>?, groupID: Int64?) throws -> [ClipItem] {
+        try contentPool.read { db in
+            var where_ = "sensitivity = :normal AND \(column) LIKE :p ESCAPE '\\'"
             var args: [String: (any DatabaseValueConvertible)?] = [
                 "p": pattern, "limit": limit, "normal": Sensitivity.normal.rawValue,
             ]
@@ -271,7 +285,11 @@ public final class ClipflowStore: Sendable {
     ///
     /// ⚠️ 只扫 `preview`（摘要，上限 2000 字），扫不到正文深处 ——
     /// 全文在 CAS 里压着，逐条解压来做 LIKE 是不可接受的。
-    /// 这是有意的取舍：兜底就该便宜。实测全表 2 MB，一次约 8ms。
+    ///
+    /// ⚠️ **只扫最近 `fallbackScanLimit` 条。** `%q%` 用不上任何索引，就是全表扫：
+    /// 5 万条实测 14.7ms，而且**查不到时最慢**（找不到就得看完每一行）。
+    /// 不封顶的话它会随库线性劣化，成为搜索延迟的天花板。
+    /// 兜底本来就是"尽力而为"的一层，给它一个可预测的上界比让它无限拖慢合理。
     private func substringMatches(_ query: String, limit: Int,
                                   kinds: Set<ClipKind>?, groupID: Int64?) throws -> [ClipItem] {
         let pattern = "%" + SearchRanker.escapeLike(query) + "%"
@@ -293,12 +311,18 @@ public final class ClipflowStore: Sendable {
                 where_ += " AND groupID = :gid"
                 args["gid"] = groupID
             }
+            args["scan"] = Self.fallbackScanLimit
             return try ClipItem.fetchAll(db, sql: """
-                SELECT * FROM items WHERE \(where_)
+                SELECT * FROM (
+                    SELECT * FROM items ORDER BY usedSeq DESC LIMIT :scan
+                ) WHERE \(where_)
                 ORDER BY usedSeq DESC LIMIT :limit
                 """, arguments: StatementArguments(args))
         }
     }
+
+    /// 子串兜底最多看多少条最近记录。见 `substringMatches` 的说明。
+    static let fallbackScanLimit = 20_000
 
     /// 模糊命中：走 FTS 拿候选，再回内容库按分类取。
     private func fuzzyMatches(_ query: String, limit: Int,

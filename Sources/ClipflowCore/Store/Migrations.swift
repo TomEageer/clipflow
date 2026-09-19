@@ -125,6 +125,49 @@ public enum Migrations {
                            arguments: [ClipItem.previewLimit, ClipItem.previewLimit])
         }
 
+        // 建立真正服务于查询模式的索引。
+        //
+        // 之前列表和搜索全是**全表扫 + 临时 B 树排序**：
+        // 唯一带 usedSeq 的索引是 `(pinned, usedSeq)`，首列是已作废的 pinned，
+        // SQLite 用不上它来满足 `ORDER BY usedSeq DESC`。
+        // 实测 5 万条：recent(200) 14ms、按类型过滤 16ms、标题前缀查询 8~10ms。
+        // 加索引后分别是 0.036ms / 0.12ms / 0.023ms。
+        m.registerMigration("v6_query_indexes") { db in
+            // 列表排序的主力。ORDER BY usedSeq DESC 直接反向扫这个索引，不再排序。
+            try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_items_seq ON items(usedSeq)")
+            // 分类标签页：过滤 + 排序一个索引全包
+            try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_items_kind_seq ON items(kind, usedSeq)")
+
+            // 标题前缀查询要走索引，就得有个"标题"列可以索引。
+            //
+            // **用虚拟生成列，不用普通列**：普通列要在入库/改写原文/图片重分类
+            // 每个写入点手动维护，漏一处就悄悄搜不到。生成列由 SQLite 自己算，
+            // 漏不掉。（STORED 不能用 ALTER TABLE 加，VIRTUAL 可以，
+            // 而且索引里存的就是算好的值，查询照样走索引。）
+            //
+            // `ltrim` 掉前导空白/换行 = 落在首个非空行的开头，
+            // 对**前缀**匹配来说与 `SearchRanker.title(of:)` 等价。
+            try db.execute(sql: """
+                ALTER TABLE items ADD COLUMN titleKey TEXT
+                GENERATED ALWAYS AS (
+                    ltrim(substr(preview, 1, 200), char(10) || char(13) || char(9) || ' ')
+                ) VIRTUAL
+                """)
+            // COLLATE NOCASE 是 LIKE 走索引的前提 —— LIKE 默认大小写不敏感，
+            // 索引排序规则对不上就优化不了，白建。
+            try db.execute(sql:
+                "CREATE INDEX IF NOT EXISTS idx_items_titleKey ON items(titleKey COLLATE NOCASE)")
+            try db.execute(sql:
+                "CREATE INDEX IF NOT EXISTS idx_items_name ON items(name COLLATE NOCASE)")
+
+            // 作废索引：首列都是已被分组取代的 pinned，查不上还拖慢每次写入
+            try db.execute(sql: "DROP INDEX IF EXISTS idx_items_pinned")
+            try db.execute(sql: "DROP INDEX IF EXISTS idx_items_usedSeq")
+
+            // 没有统计信息时 SQLite 只能按规则猜，容易选错索引
+            try db.execute(sql: "ANALYZE")
+        }
+
         return m
     }
 
