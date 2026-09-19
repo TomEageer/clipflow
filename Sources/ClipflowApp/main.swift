@@ -68,6 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         autoCheckUpdatesIfEnabled()
         startOCR()
         backfillJSONKindOnce()
+        rebuildSearchIndexOnce()
 
         // 演示模式：启动即在屏幕中央打开面板，供文档截图
         if ProcessInfo.processInfo.environment["CLIPFLOW_DEMO"] == "1" {
@@ -260,6 +261,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// JSON / SQL 类型是后加的，之前攒下的这类条目都被标成了文本/富文本/代码。
     /// 回填一次让老条目也归位。做完打标记，不重复跑；**加新类型时把 key 升个版本**
     /// 就能让所有人再跑一轮。
+    /// 分词规则换了就得重建索引 —— 老索引里是旧规则切出来的词元，对不上新查询。
+    /// 放后台跑：几千条要逐条读 CAS blob 解压，别卡启动。
+    private func rebuildSearchIndexOnce() {
+        let key = "com.tomeageer.clipflow.searchIndex.v2"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        guard let store = self.store else { return }
+        Task.detached(priority: .utility) {
+            let t = Date()
+            let n = (try? store.rebuildIndex()) ?? 0
+            UserDefaults.standard.set(true, forKey: key)
+            await MainActor.run { AppDelegate.current?.model.reload() }
+            print("检索索引重建：\(n) 条，耗时 \(String(format: "%.1f", -t.timeIntervalSinceNow))s")
+        }
+    }
+
     private func backfillJSONKindOnce() {
         let key = "com.tomeageer.clipflow.contentBackfill.v4"
         guard !UserDefaults.standard.bool(forKey: key) else { return }

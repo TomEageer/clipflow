@@ -6,46 +6,80 @@ import ImageIO
 
 // MARK: - 分词
 
-@Suite("中文 bigram 分词")
-struct BigramTests {
+@Suite("检索分词")
+struct TokenizerTests {
 
     @Test("连续汉字切成 bigram")
     func chineseBigram() {
-        #expect(BigramTokenizer.tokenize("订单支付") == "订单 单支 支付")
+        #expect(SearchTokenizer.tokenize("订单支付") == "订单 单支 支付")
     }
 
     @Test("单个孤立汉字原样保留")
     func singleIdeograph() {
-        #expect(BigramTokenizer.tokenize("元") == "元")
+        #expect(SearchTokenizer.tokenize("元") == "元")
     }
 
-    @Test("中英混合：非汉字原样，汉字切 bigram")
+    /// 拉丁按**词**入索引，不是按字符 —— 按字符会让短语查询跨词乱拼
+    @Test("拉丁按词入索引，并拆出 camelCase 子词")
+    func latinWords() {
+        let t = SearchTokenizer.tokenize("leaderStaffNo")
+        #expect(t.split(separator: " ").contains("leaderstaffno"))
+        #expect(t.split(separator: " ").contains("staff"))
+        #expect(t.split(separator: " ").contains("leader"))
+        // 单字符子词不要，否则搜 a 命中一切
+        #expect(SearchTokenizer.tokenize("userA").split(separator: " ").contains("a") == false)
+    }
+
+    @Test("字母数字边界也算子词边界")
+    func digitBoundary() {
+        let t = SearchTokenizer.tokenize("StaffInfo12").split(separator: " ").map(String.init)
+        #expect(t.contains("staffinfo12"))
+        #expect(t.contains("staff"))
+        #expect(t.contains("12"))
+    }
+
+    @Test("连续大写后接小写：HTTPServer → http + server")
+    func acronym() {
+        let t = SearchTokenizer.tokenize("HTTPServer").split(separator: " ").map(String.init)
+        #expect(t.contains("http"))
+        #expect(t.contains("server"))
+    }
+
+    @Test("中英混合：汉字切 bigram，英文整词")
     func mixed() {
-        let t = BigramTokenizer.tokenize("查询orderId")
+        let t = SearchTokenizer.tokenize("查询orderId").split(separator: " ").map(String.init)
         #expect(t.contains("查询"))
-        #expect(t.contains("o"))
+        #expect(t.contains("orderid"))
+        #expect(t.contains("order"))
     }
 
     @Test("查询表达式对汉字用短语查询（引号包裹）")
     func matchExpr() throws {
-        let e = try #require(BigramTokenizer.matchExpression(for: "订单支付"))
+        let e = try #require(SearchTokenizer.matchExpression(for: "订单支付"))
         #expect(e == "\"订单 单支 支付\"")
+    }
+
+    @Test("英文查询用前缀匹配")
+    func latinPrefix() throws {
+        let e = try #require(SearchTokenizer.matchExpression(for: "user"))
+        #expect(e == "\"user\"*")
     }
 
     @Test("多词之间是 AND")
     func multiTerm() throws {
-        let e = try #require(BigramTokenizer.matchExpression(for: "订单 支付"))
+        let e = try #require(SearchTokenizer.matchExpression(for: "订单 支付"))
         #expect(e.contains(" AND "))
     }
 
     @Test("空查询返回 nil")
     func emptyQuery() {
-        #expect(BigramTokenizer.matchExpression(for: "   ") == nil)
+        #expect(SearchTokenizer.matchExpression(for: "   ") == nil)
+        #expect(SearchTokenizer.matchExpression(for: " ,. ") == nil)
     }
 
     @Test("引号被转义，不构成注入")
     func quoteEscaping() throws {
-        let e = try #require(BigramTokenizer.matchExpression(for: "a\"b"))
+        let e = try #require(SearchTokenizer.matchExpression(for: "a\"b"))
         #expect(!e.contains("a\"b"))
     }
 }
@@ -2057,5 +2091,79 @@ struct PreviewAndIndexTests {
 
         #expect(try store.search("尾部暗号", limit: 10).count == 1)
         #expect(try store.search("我的备注", limit: 10).count == 1)
+    }
+}
+
+// MARK: - 搜索精度
+
+@Suite("搜索精度")
+struct SearchPrecisionTests {
+
+    private func tempStore() throws -> (ClipflowStore, URL) {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "clipflow-test-\(UUID().uuidString)")
+        return (try ClipflowStore(paths: StoragePaths(root: dir)), dir)
+    }
+
+    private func put(_ ingest: IngestService, _ text: String) throws {
+        try ingest.ingest(RawSnapshot(representations: [("public.utf8-plain-text", Data(text.utf8), 0)]))
+    }
+
+    /// 用户报的：搜 test 命中了这条 SQL。
+    /// 旧实现逐字符入索引，标点被 unicode61 丢掉又不占位置，
+    /// `update` 的尾巴接 `Staff` 的头拼出了 `t e s t`。
+    @Test("不跨词拼出假命中")
+    func noCrossWordFalsePositive() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        try put(ingest, "update `StaffInfo12` SET leaderStaffNo = '' WHERE `KeyID` = 'x' limit 1;")
+
+        #expect(try store.search("test", limit: 10).isEmpty)
+        #expect(try store.search("ates", limit: 10).isEmpty)
+        // 真正出现过的词仍要搜得到
+        #expect(try store.search("update", limit: 10).count == 1)
+        #expect(try store.search("staff", limit: 10).count == 1)   // camelCase 子词
+    }
+
+    @Test("英文用前缀匹配：user 能找到 userName 和 /Users/")
+    func latinPrefixMatching() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        try put(ingest, "userName")
+        try put(ingest, "/Users/tom/projects")
+        try put(ingest, "abuser")          // 词中间含 user，不该命中
+
+        let hits = try store.search("user", limit: 10).map(\.preview)
+        #expect(hits.contains("userName"))
+        #expect(hits.contains("/Users/tom/projects"))
+        #expect(hits.contains("abuser") == false)
+    }
+
+    @Test("中文短语查询不退化成 AND")
+    func chinesePhrase() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        try put(ingest, "订单支付回调")
+        try put(ingest, "这里有订单，那里有支付")   // 两词都在但不相邻
+
+        let hits = try store.search("订单支付", limit: 10).map(\.preview)
+        #expect(hits == ["订单支付回调"])
+    }
+
+    @Test("重建索引后结果不变")
+    func rebuildIsIdempotent() throws {
+        let (store, dir) = try tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ingest = IngestService(store: store)
+        try put(ingest, "userName")
+        try put(ingest, "订单支付回调")
+
+        let before = try store.search("user", limit: 10).map(\.preview)
+        #expect(try store.rebuildIndex() == 2)
+        #expect(try store.search("user", limit: 10).map(\.preview) == before)
+        #expect(try store.search("订单支付", limit: 10).count == 1)
     }
 }

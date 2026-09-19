@@ -244,7 +244,7 @@ public final class ClipflowStore: Sendable {
     /// 模糊命中：走 FTS 拿候选，再回内容库按分类取。
     private func fuzzyMatches(_ query: String, limit: Int,
                               kinds: Set<ClipKind>?, groupID: Int64?) throws -> [ClipItem] {
-        guard let expr = BigramTokenizer.matchExpression(for: query) else { return [] }
+        guard let expr = SearchTokenizer.matchExpression(for: query) else { return [] }
 
         // 带分类过滤时多要一些候选 —— 过滤发生在候选之后，
         // 候选给得太少会出现"这个标签页下明明有，却一条都不显示"。
@@ -465,13 +465,21 @@ public final class ClipflowStore: Sendable {
     }
 
     /// 空闲时维护：合并 FTS 段 + 回收空间。实测 100 万条 optimize 耗时 2.7s，之后检索中位 0.27→0.10ms。
+    /// 合并 FTS 段 + 真正回收磁盘空间。
+    ///
+    /// ⚠️ **必须用 `VACUUM`，不能用 `PRAGMA incremental_vacuum`。**
+    /// 后者只在 `auto_vacuum = incremental` 的库上有效，而这两个库都是 `auto_vacuum = 0`
+    /// —— 也就是说它一直是**空操作**：实测索引库里躺着 2093 个空闲页没回收，
+    /// 而 CLI 和设置页都写着"回收空间"。
+    ///
+    /// `VACUUM` 不能在事务里跑，所以走 `writeWithoutTransaction`。
     public func optimize() throws {
-        try indexPool.write { db in
+        try indexPool.writeWithoutTransaction { db in
             try db.execute(sql: "INSERT INTO items_fts(items_fts) VALUES('optimize')")
-            try db.execute(sql: "PRAGMA incremental_vacuum")
+            try db.execute(sql: "VACUUM")
         }
-        try contentPool.write { db in
-            try db.execute(sql: "PRAGMA incremental_vacuum")
+        try contentPool.writeWithoutTransaction { db in
+            try db.execute(sql: "VACUUM")
         }
     }
 
